@@ -3,6 +3,10 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
 
+// ---------------------------------------------------------------------------
+// Level 1 types
+// ---------------------------------------------------------------------------
+
 interface SystemNode {
   canonical_name: string
   category: string
@@ -34,11 +38,59 @@ interface DiscoveryResult {
   systems_flagged_for_review: number
 }
 
-type State =
+// ---------------------------------------------------------------------------
+// Level 2 types
+// ---------------------------------------------------------------------------
+
+interface Gap {
+  source_system: string
+  destination_system: string
+  entities: string[]
+  triggers: string[]
+  status: "available" | "missing"
+  effort: "S" | "M" | "L" | "XL" | null
+  effort_rationale: string | null
+  use_cases_blocked: string[]
+  priority_score: number
+}
+
+interface DependencyLink {
+  integration: string
+  required_before: string[]
+}
+
+interface GapReport {
+  use_cases_analyzed: number
+  total_gaps: number
+  missing_integrations: number
+  gaps: Gap[]
+  dependency_graph: DependencyLink[]
+  skipped: {
+    unmapped_use_cases: Array<{ text: string; reason: string }>
+    rejected_systems: Array<{ use_case: string; system: string; reason: string }>
+    missing_capabilities: Array<{ use_case: string; capability_needed: string }>
+  }
+}
+
+// ---------------------------------------------------------------------------
+// State machines
+// ---------------------------------------------------------------------------
+
+type L1State =
   | { phase: "idle" }
   | { phase: "processing"; logs: string[] }
   | { phase: "done"; result: DiscoveryResult; logs: string[] }
   | { phase: "error"; message: string; logs: string[] }
+
+type L2State =
+  | { phase: "idle" }
+  | { phase: "processing"; logs: string[] }
+  | { phase: "done"; report: GapReport; logs: string[] }
+  | { phase: "error"; message: string; logs: string[] }
+
+// ---------------------------------------------------------------------------
+// Shared constants
+// ---------------------------------------------------------------------------
 
 const CRITICALITY_COLORS: Record<string, string> = {
   critical: "bg-red-100 text-red-800",
@@ -47,6 +99,29 @@ const CRITICALITY_COLORS: Record<string, string> = {
   low: "bg-green-100 text-green-800",
   unknown: "bg-slate-100 text-slate-600",
 }
+
+const EFFORT_COLORS: Record<string, string> = {
+  S: "bg-green-100 text-green-800",
+  M: "bg-yellow-100 text-yellow-800",
+  L: "bg-orange-100 text-orange-800",
+  XL: "bg-red-100 text-red-800",
+}
+
+const EFFORT_LABELS: Record<string, string> = {
+  S: "1–3 days",
+  M: "1–2 weeks",
+  L: "3–6 weeks",
+  XL: "2+ months",
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  available: "bg-green-100 text-green-800",
+  missing: "bg-red-100 text-red-800",
+}
+
+// ---------------------------------------------------------------------------
+// Shared components
+// ---------------------------------------------------------------------------
 
 function Badge({ text, color }: { text: string; color: string }) {
   return (
@@ -69,7 +144,7 @@ function ConfidenceBar({ value }: { value: number }) {
   )
 }
 
-function LogPanel({ logs, active }: { logs: string[]; active: boolean }) {
+function LogPanel({ logs, active, label }: { logs: string[]; active: boolean; label: string }) {
   const [open, setOpen] = useState(true)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -90,7 +165,7 @@ function LogPanel({ logs, active }: { logs: string[]; active: boolean }) {
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${active ? "bg-green-400 animate-pulse" : "bg-slate-500"}`} />
           <span className="text-xs font-mono text-slate-300">
-            Pipeline logs — {logs.length} line{logs.length !== 1 ? "s" : ""}
+            {label} — {logs.length} line{logs.length !== 1 ? "s" : ""}
           </span>
         </div>
         <svg
@@ -112,10 +187,20 @@ function LogPanel({ logs, active }: { logs: string[]; active: boolean }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
 export default function HomePage() {
+  // Level 1 state
   const [files, setFiles] = useState<File[]>([])
-  const [state, setState] = useState<State>({ phase: "idle" })
+  const [l1State, setL1State] = useState<L1State>({ phase: "idle" })
   const [activeTab, setActiveTab] = useState<"systems" | "relationships">("systems")
+
+  // Level 2 state
+  const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
+  const [useCaseText, setUseCaseText] = useState("")
+  const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => {
@@ -141,19 +226,22 @@ export default function HomePage() {
   const removeFile = (name: string) =>
     setFiles((prev) => prev.filter((f) => f.name !== name))
 
-  const run = async () => {
+  // -------------------------------------------------------------------------
+  // Level 1 — discover systems
+  // -------------------------------------------------------------------------
+  const runDiscovery = async () => {
     if (!files.length) return
-    setState({ phase: "processing", logs: [] })
+    setL1State({ phase: "processing", logs: [] })
+    setL2State({ phase: "idle" })
 
     const form = new FormData()
     files.forEach((f) => form.append("files", f))
 
     try {
       const res = await fetch("/api/discover", { method: "POST", body: form })
-
       if (!res.ok || !res.body) {
         const data = await res.json()
-        setState({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        setL1State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
         return
       }
 
@@ -172,26 +260,22 @@ export default function HomePage() {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue
           let event: { type: string; message?: string; data?: DiscoveryResult }
-          try {
-            event = JSON.parse(line.slice(6))
-          } catch {
-            continue
-          }
+          try { event = JSON.parse(line.slice(6)) } catch { continue }
 
           if (event.type === "log" && event.message) {
-            setState((prev) =>
+            setL1State((prev) =>
               prev.phase === "processing"
                 ? { ...prev, logs: [...prev.logs, event.message!] }
                 : prev
             )
           } else if (event.type === "result" && event.data) {
-            setState((prev) => ({
+            setL1State((prev) => ({
               phase: "done",
               result: event.data!,
               logs: prev.phase === "processing" ? prev.logs : [],
             }))
           } else if (event.type === "error" && event.message) {
-            setState((prev) => ({
+            setL1State((prev) => ({
               phase: "error",
               message: event.message!,
               logs: prev.phase === "processing" ? prev.logs : [],
@@ -200,7 +284,7 @@ export default function HomePage() {
         }
       }
     } catch (err: unknown) {
-      setState((prev) => ({
+      setL1State((prev) => ({
         phase: "error",
         message: err instanceof Error ? err.message : "Unknown error",
         logs: prev.phase === "processing" ? prev.logs : [],
@@ -208,12 +292,85 @@ export default function HomePage() {
     }
   }
 
-  const logs =
-    state.phase === "processing" || state.phase === "done" || state.phase === "error"
-      ? state.logs
-      : []
+  // -------------------------------------------------------------------------
+  // Level 2 — gap analysis
+  // -------------------------------------------------------------------------
+  const runGapAnalysis = async () => {
+    if (l1State.phase !== "done" || !useCaseText.trim()) return
+    setL2State({ phase: "processing", logs: [] })
 
-  const result = state.phase === "done" ? state.result : null
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventory: l1State.result,
+          use_cases: useCaseText,
+        }),
+      })
+
+      if (!res.ok || !res.body) {
+        const data = await res.json()
+        setL2State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          let event: { type: string; message?: string; data?: GapReport }
+          try { event = JSON.parse(line.slice(6)) } catch { continue }
+
+          if (event.type === "log" && event.message) {
+            setL2State((prev) =>
+              prev.phase === "processing"
+                ? { ...prev, logs: [...prev.logs, event.message!] }
+                : prev
+            )
+          } else if (event.type === "result" && event.data) {
+            setL2State((prev) => ({
+              phase: "done",
+              report: event.data!,
+              logs: prev.phase === "processing" ? prev.logs : [],
+            }))
+          } else if (event.type === "error" && event.message) {
+            setL2State((prev) => ({
+              phase: "error",
+              message: event.message!,
+              logs: prev.phase === "processing" ? prev.logs : [],
+            }))
+          }
+        }
+      }
+    } catch (err: unknown) {
+      setL2State((prev) => ({
+        phase: "error",
+        message: err instanceof Error ? err.message : "Unknown error",
+        logs: prev.phase === "processing" ? prev.logs : [],
+      }))
+    }
+  }
+
+  const l1Logs =
+    l1State.phase === "processing" || l1State.phase === "done" || l1State.phase === "error"
+      ? l1State.logs : []
+  const l1Result = l1State.phase === "done" ? l1State.result : null
+
+  const l2Logs =
+    l2State.phase === "processing" || l2State.phase === "done" || l2State.phase === "error"
+      ? l2State.logs : []
+  const l2Report = l2State.phase === "done" ? l2State.report : null
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -224,11 +381,21 @@ export default function HomePage() {
         </div>
         <div>
           <h1 className="text-lg font-semibold text-slate-900">Aivar Discovery Agent</h1>
-          <p className="text-xs text-slate-500">Enterprise system discovery from documents</p>
+          <p className="text-xs text-slate-500">Enterprise system discovery &amp; integration gap analysis</p>
         </div>
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+
+        {/* ---------------------------------------------------------------- */}
+        {/* LEVEL 1 — System Discovery                                        */}
+        {/* ---------------------------------------------------------------- */}
+        <div className="space-y-2">
+          <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+            Level 1 — System Discovery
+          </h2>
+        </div>
+
         {/* Upload zone */}
         <div
           {...getRootProps()}
@@ -260,9 +427,7 @@ export default function HomePage() {
                   {f.name.split(".").pop()}
                 </span>
                 <span className="flex-1 text-sm text-slate-700 truncate">{f.name}</span>
-                <span className="text-xs text-slate-400">
-                  {(f.size / 1024).toFixed(1)} KB
-                </span>
+                <span className="text-xs text-slate-400">{(f.size / 1024).toFixed(1)} KB</span>
                 <button
                   onClick={() => removeFile(f.name)}
                   className="text-slate-400 hover:text-red-500 transition-colors"
@@ -279,16 +444,21 @@ export default function HomePage() {
         {/* Actions */}
         <div className="flex items-center gap-4">
           <button
-            onClick={run}
-            disabled={!files.length || state.phase === "processing"}
+            onClick={runDiscovery}
+            disabled={!files.length || l1State.phase === "processing"}
             className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
               disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {state.phase === "processing" ? "Analyzing…" : "Discover Systems"}
+            {l1State.phase === "processing" ? "Analyzing…" : "Discover Systems"}
           </button>
-          {(state.phase === "done" || state.phase === "error") && (
+          {(l1State.phase === "done" || l1State.phase === "error") && (
             <button
-              onClick={() => { setState({ phase: "idle" }); setFiles([]) }}
+              onClick={() => {
+                setL1State({ phase: "idle" })
+                setL2State({ phase: "idle" })
+                setFiles([])
+                setUseCaseText("")
+              }}
               className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
             >
               Reset
@@ -296,26 +466,26 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* Log panel */}
-        <LogPanel logs={logs} active={state.phase === "processing"} />
+        {/* L1 log panel */}
+        <LogPanel logs={l1Logs} active={l1State.phase === "processing"} label="Discovery logs" />
 
-        {/* Error */}
-        {state.phase === "error" && (
+        {/* L1 error */}
+        {l1State.phase === "error" && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-            <strong>Error:</strong> {state.message}
+            <strong>Error:</strong> {l1State.message}
           </div>
         )}
 
-        {/* Results */}
-        {result && (
+        {/* L1 results */}
+        {l1Result && (
           <div className="space-y-6">
-            {/* Stats row */}
+            {/* Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {[
-                { label: "Documents", value: result.total_documents_processed },
-                { label: "Systems Found", value: result.total_systems_found },
-                { label: "Relationships", value: result.graph_stats.total_edges },
-                { label: "Flagged for Review", value: result.systems_flagged_for_review },
+                { label: "Documents", value: l1Result.total_documents_processed },
+                { label: "Systems Found", value: l1Result.total_systems_found },
+                { label: "Relationships", value: l1Result.graph_stats.total_edges },
+                { label: "Flagged for Review", value: l1Result.systems_flagged_for_review },
               ].map(({ label, value }) => (
                 <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
                   <p className="text-2xl font-bold text-slate-900">{value}</p>
@@ -324,11 +494,11 @@ export default function HomePage() {
               ))}
             </div>
 
-            {/* Download */}
+            {/* Download L1 */}
             <div className="flex justify-end">
               <button
                 onClick={() => {
-                  const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" })
+                  const blob = new Blob([JSON.stringify(l1Result, null, 2)], { type: "application/json" })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement("a")
                   a.href = url
@@ -342,11 +512,11 @@ export default function HomePage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                Download JSON
+                Download Inventory JSON
               </button>
             </div>
 
-            {/* Tab switcher */}
+            {/* L1 tabs */}
             <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
               {(["systems", "relationships"] as const).map((tab) => (
                 <button
@@ -374,7 +544,7 @@ export default function HomePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {result.systems.map((sys, i) => (
+                    {l1Result.systems.map((sys, i) => (
                       <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50" : "hover:bg-slate-50"}>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">{sys.canonical_name}</div>
@@ -389,15 +559,13 @@ export default function HomePage() {
                             color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown}
                           />
                         </td>
-                        <td className="px-4 py-3">
-                          <ConfidenceBar value={sys.confidence} />
-                        </td>
+                        <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
                         <td className="px-4 py-3 text-slate-600 text-center">{sys.mention_count}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {result.systems.length === 0 && (
+                {l1Result.systems.length === 0 && (
                   <div className="px-4 py-8 text-center text-sm text-slate-400">No systems found</div>
                 )}
               </div>
@@ -416,7 +584,7 @@ export default function HomePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {result.relationships.map((rel, i) => (
+                    {l1Result.relationships.map((rel, i) => (
                       <tr key={i} className="hover:bg-slate-50">
                         <td className="px-4 py-3 font-medium text-slate-900">{rel.source}</td>
                         <td className="px-4 py-3">
@@ -426,19 +594,304 @@ export default function HomePage() {
                           <span className="ml-2 text-xs text-slate-400">{rel.direction}</span>
                         </td>
                         <td className="px-4 py-3 font-medium text-slate-900">{rel.target}</td>
-                        <td className="px-4 py-3">
-                          <ConfidenceBar value={rel.confidence} />
-                        </td>
+                        <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {result.relationships.length === 0 && (
+                {l1Result.relationships.length === 0 && (
                   <div className="px-4 py-8 text-center text-sm text-slate-400">No relationships found</div>
                 )}
               </div>
             )}
           </div>
+        )}
+
+        {/* ---------------------------------------------------------------- */}
+        {/* LEVEL 2 — Gap Analysis (appears after L1 completes)               */}
+        {/* ---------------------------------------------------------------- */}
+        {l1State.phase === "done" && (
+          <>
+            {/* Divider */}
+            <div className="flex items-center gap-4 pt-2">
+              <div className="flex-1 h-px bg-slate-200" />
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider whitespace-nowrap">
+                Level 2 — Integration Gap Analysis
+              </span>
+              <div className="flex-1 h-px bg-slate-200" />
+            </div>
+
+            {/* Use case input */}
+            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+              <p className="text-sm text-slate-600">
+                Describe your automation goals below — one per line. The agent will map
+                each to the discovered systems, identify missing integrations, and
+                prioritise the gaps for you.
+              </p>
+              <textarea
+                value={useCaseText}
+                onChange={(e) => setUseCaseText(e.target.value)}
+                disabled={l2State.phase === "processing"}
+                placeholder={
+                  "Sync new leads from the website to the CRM automatically\n" +
+                  "Auto-generate invoices when a deal is marked closed-won\n" +
+                  "Send order confirmation emails via the communication platform"
+                }
+                rows={5}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800
+                  placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500
+                  disabled:bg-slate-50 disabled:text-slate-400 resize-none font-mono"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={runGapAnalysis}
+                  disabled={!useCaseText.trim() || l2State.phase === "processing"}
+                  className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
+                    disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {l2State.phase === "processing" ? "Analysing gaps…" : "Analyse Integration Gaps"}
+                </button>
+                {(l2State.phase === "done" || l2State.phase === "error") && (
+                  <button
+                    onClick={() => { setL2State({ phase: "idle" }); setUseCaseText("") }}
+                    className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* L2 log panel */}
+            <LogPanel logs={l2Logs} active={l2State.phase === "processing"} label="Gap analysis logs" />
+
+            {/* L2 error */}
+            {l2State.phase === "error" && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                <strong>Error:</strong> {l2State.message}
+              </div>
+            )}
+
+            {/* L2 results */}
+            {l2Report && (
+              <div className="space-y-6">
+                {/* L2 stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                    { label: "Use Cases Mapped", value: l2Report.use_cases_analyzed },
+                    { label: "Total Integration Checks", value: l2Report.total_gaps },
+                    { label: "Missing / Partial", value: l2Report.missing_integrations },
+                    { label: "Unmapped Use Cases", value: l2Report.skipped.unmapped_use_cases.length },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
+                      <p className="text-2xl font-bold text-slate-900">{value}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Download L2 */}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([JSON.stringify(l2Report, null, 2)], { type: "application/json" })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement("a")
+                      a.href = url
+                      a.download = "gap_analysis.json"
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download Gap Report JSON
+                  </button>
+                </div>
+
+                {/* L2 tabs */}
+                <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+                  {([
+                    { key: "gaps", label: `Gaps (${l2Report.gaps.length})` },
+                    { key: "dependencies", label: `Dependencies (${l2Report.dependency_graph.length})` },
+                    { key: "skipped", label: `Skipped (${l2Report.skipped.unmapped_use_cases.length + l2Report.skipped.rejected_systems.length})` },
+                  ] as const).map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => setL2Tab(key)}
+                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors
+                        ${l2Tab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Gaps table */}
+                {l2Tab === "gaps" && (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                          <th className="px-4 py-3 font-medium text-slate-600">Integration</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Status</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Effort</th>
+                          <th className="px-4 py-3 font-medium text-slate-600 text-center">Blocked</th>
+                          <th className="px-4 py-3 font-medium text-slate-600 text-right">Priority</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {l2Report.gaps.map((gap, i) => (
+                          <tr key={i} className={gap.status === "missing" ? "bg-red-50/40" : "hover:bg-slate-50"}>
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-slate-900">
+                                {gap.source_system} → {gap.destination_system}
+                              </div>
+                              {gap.entities.length > 0 && (
+                                <div className="text-xs text-slate-500 mt-0.5">
+                                  {gap.entities.join(", ")}
+                                </div>
+                              )}
+                              {gap.effort_rationale && (
+                                <div className="text-xs text-slate-400 mt-1 italic">{gap.effort_rationale}</div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge
+                                text={gap.status}
+                                color={STATUS_COLORS[gap.status] ?? "bg-slate-100 text-slate-600"}
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              {gap.effort ? (
+                                <div className="flex flex-col gap-0.5">
+                                  <Badge
+                                    text={gap.effort}
+                                    color={EFFORT_COLORS[gap.effort] ?? "bg-slate-100 text-slate-600"}
+                                  />
+                                  <span className="text-xs text-slate-400">{EFFORT_LABELS[gap.effort]}</span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-center text-slate-600">
+                              {gap.use_cases_blocked.length}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-sm text-slate-700">
+                              {gap.priority_score.toFixed(0)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {l2Report.gaps.length === 0 && (
+                      <div className="px-4 py-8 text-center text-sm text-slate-400">
+                        No integration gaps detected
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Dependencies table */}
+                {l2Tab === "dependencies" && (
+                  <div className="space-y-3">
+                    {l2Report.dependency_graph.length === 0 ? (
+                      <div className="bg-white rounded-xl border border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                        No blocking dependencies
+                      </div>
+                    ) : (
+                      l2Report.dependency_graph.map((dep, i) => (
+                        <div key={i} className="bg-white rounded-xl border border-slate-200 p-4">
+                          <div className="flex items-start gap-3">
+                            <span className="mt-0.5 px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-xs font-mono whitespace-nowrap">
+                              {dep.integration}
+                            </span>
+                            <div className="flex-1">
+                              <p className="text-xs text-slate-500 mb-1 font-medium">must exist before:</p>
+                              <ul className="space-y-1">
+                                {dep.required_before.map((uc, j) => (
+                                  <li key={j} className="text-sm text-slate-700 flex items-start gap-1.5">
+                                    <span className="text-slate-400 mt-0.5">•</span>
+                                    {uc}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* Skipped panel */}
+                {l2Tab === "skipped" && (
+                  <div className="space-y-4">
+                    {l2Report.skipped.unmapped_use_cases.length > 0 && (
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                          <p className="text-sm font-medium text-slate-700">Unmapped use cases</p>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                          {l2Report.skipped.unmapped_use_cases.map((item, i) => (
+                            <div key={i} className="px-4 py-3">
+                              <p className="text-sm text-slate-800">{item.text}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">{item.reason}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {l2Report.skipped.rejected_systems.length > 0 && (
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                          <p className="text-sm font-medium text-slate-700">Rejected systems (not in inventory)</p>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                          {l2Report.skipped.rejected_systems.map((item, i) => (
+                            <div key={i} className="px-4 py-3">
+                              <p className="text-sm text-slate-800 font-medium">{item.system}</p>
+                              <p className="text-xs text-slate-500">{item.use_case}</p>
+                              <p className="text-xs text-slate-400 mt-0.5">{item.reason}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {l2Report.skipped.missing_capabilities.length > 0 && (
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                          <p className="text-sm font-medium text-slate-700">Missing capabilities (needed but not in inventory)</p>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                          {l2Report.skipped.missing_capabilities.map((item, i) => (
+                            <div key={i} className="px-4 py-3">
+                              <p className="text-sm text-slate-800">{item.capability_needed}</p>
+                              <p className="text-xs text-slate-500">{item.use_case}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {l2Report.skipped.unmapped_use_cases.length === 0 &&
+                      l2Report.skipped.rejected_systems.length === 0 &&
+                      l2Report.skipped.missing_capabilities.length === 0 && (
+                      <div className="bg-white rounded-xl border border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                        Nothing was skipped — all use cases were mapped successfully
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </main>

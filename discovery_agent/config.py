@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 TEXT_MODEL: str = os.getenv("TEXT_MODEL", "llama-3.3-70b-versatile")
 VISION_MODEL: str = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
+# Shared fuzzy-matching threshold for system name deduplication (Level 1)
+# and inventory cross-check (Level 2). Both use token_sort_ratio; raise or
+# lower this together so the behaviour stays consistent across the pipeline.
+FUZZY_SIMILARITY_THRESHOLD: int = 88
+
+# How long to wait (seconds) before retrying after all API keys are exhausted.
+_RATE_LIMIT_RECOVERY_SECS: int = 60
+
+# How many times to cycle through all keys before giving up (n * this).
+_KEY_ROTATION_PASSES: int = 2
+
 def _load_keys() -> List[str]:
     keys: List[str] = []
     # Single key

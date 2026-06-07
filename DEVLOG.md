@@ -2,6 +2,20 @@
 
 ---
 
+### [2026-06-07] Level 2 — Reverted "Fix 1/Fix 2" changes to restore pre-regression state
+
+**Goal:** Undo all changes made during the "Fix 1/Fix 2" session that caused a regression in Level 2 pipeline behavior.
+
+**What was reverted:**
+- `analyzer.py` — system prompt reverted to pre-"Fix 1/Fix 2" version: "Match each system by its documented role, not by category guess" with correct role-matching examples; removed "carrier tracking event" example and "do NOT pick because database" instruction
+- `validator.py` — back to 3-tuple return `(valid_canonical, rejected, missing_caps)`; no `name_map` 4th element
+- `pipeline.py` — back to `valid_set` filter for flows; no name_map normalization pass
+- `gap_detector.py` — back to bidirectional-only exists set (unidirectional adds one ordered pair, bidirectional adds both directions)
+
+**Why:** The "Fix 1/Fix 2" changes caused a large regression. Pre-"Fix" state was the correct baseline.
+
+---
+
 ### [2026-06-07] Discovery Agent Level 1 — Full Implementation
 
 **Goal:** Build a complete Level 1 Discovery Agent pipeline from scratch — process mixed-format documents, extract enterprise systems, deduplicate, score confidence, extract relationships, and build a knowledge graph.
@@ -80,5 +94,56 @@ Full 8-stage pipeline:
 - `run_pipeline.py`
 
 **Notes:** Start frontend with `cd frontend && npm run dev`. Backend Python env must be active in the same shell or PATH so `python` resolves correctly. The API route uses `process.cwd()` → `..` to find `run_pipeline.py` relative to the Next.js working directory.
+
+---
+
+### [2026-06-07] Confidence Scoring Fix
+
+**Goal:** Fix failing test "Inferred with metadata (key_entities + business_processes), single mention" scoring 68% instead of 70–89%.
+
+**Root cause:** `_penalties()` was applying a blanket -10 single-mention penalty whenever an inferred system had only one mention, regardless of whether metadata corroborated the extraction. A system with populated `key_entities`, `business_processes`, or `auth_method` is already corroborated by the LLM's own structured output — penalising it again is double-penalising.
+
+**Fix:** Made the single-mention penalty conditional — only apply when the system has NEITHER a structured source file (PDF/DOCX/XLSX/etc.) NOR any metadata field populated.
+
+**Files changed:** `discovery_agent/extraction/confidence.py`
+
+---
+
+### [2026-06-07] GitHub Push + History Rewrite
+
+**Goal:** Push all source code to GitHub. `frontend/node_modules/@next/swc-win32-x64-msvc/next-swc.win32-x64-msvc.node` (130MB) exceeded GitHub's 100MB limit and blocked the push.
+
+**Fix:** Orphan branch technique — created a clean branch with a single commit containing only source files, force-pushed to replace the main branch history. `.gitignore` added to exclude `__pycache__/`, `.venv/`, `.env`, `uv.lock`, `frontend/.next/`, `frontend/node_modules/`.
+
+---
+
+### [2026-06-07] Level 2 — Integration Gap Analysis Pipeline
+
+**Goal:** After Level 1 produces a system inventory, let users describe automation goals and get a prioritised gap analysis showing which integrations are missing, partial, or already available.
+
+**Architecture decisions:**
+- Single LLM call per use case (systems + flows together) via `instructor`; `@model_validator` on the Pydantic schema enforces that every flow's source/destination is in the systems list — forces internal consistency without a second LLM call.
+- Post-LLM validation via fuzzy match (token_sort_ratio ≥ 88%) against Level 1 inventory; un-matched product-like names → `rejected`; generic capability words → `missing_capabilities`.
+- Gap detection is deterministic graph check: exact/bidirectional → available; reversed direction → partial; not found → missing. Deduplication by (source, destination) key.
+- Effort classification is a pure rule table (no LLM) for repeatability: both auth → S; one auth → M; neither → L; needs_human_review bumps one size.
+- Priority formula: `(max_freq + max_crit) × (1 + downstream_count)` — additive base prevents zero-multiplication when either dimension is low.
+- Dependency graph: lists which missing/partial integrations block which use cases, sorted by number of blocked use cases.
+- Skipped section preserves unmapped use cases, rejected system names, and missing capability descriptions so nothing disappears silently.
+
+**UI:** After Level 1 results appear, a textarea + "Analyse Integration Gaps" button appears at the bottom. Submitting POSTs to `/api/analyze`, which streams SSE logs then the `GapReport` JSON. Level 1 results remain fully visible. Level 2 results display in tabbed tables: Gaps (priority-sorted, status/effort badges), Dependencies, Skipped.
+
+**Files changed:**
+- `discovery_agent/level2/__init__.py`
+- `discovery_agent/level2/models.py`
+- `discovery_agent/level2/analyzer.py`
+- `discovery_agent/level2/validator.py`
+- `discovery_agent/level2/gap_detector.py`
+- `discovery_agent/level2/effort.py`
+- `discovery_agent/level2/scorer.py`
+- `discovery_agent/level2/dependency.py`
+- `discovery_agent/level2/pipeline.py`
+- `run_level2.py`
+- `frontend/app/api/analyze/route.ts`
+- `frontend/app/page.tsx`
 
 ---

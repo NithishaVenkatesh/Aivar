@@ -7,6 +7,8 @@ import sys
 import os
 import logging
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 # Configure logging to stderr BEFORE importing anything else.
 # force=True re-configures if a library already attached a handler.
 logging.basicConfig(
