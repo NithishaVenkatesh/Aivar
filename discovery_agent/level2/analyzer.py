@@ -67,6 +67,11 @@ def _build_inventory_block(nodes: List[SystemNode]) -> str:
             role_parts.append("entities: " + ", ".join(node.key_entities))
         if node.business_processes:
             role_parts.append("processes: " + ", ".join(node.business_processes))
+        # Fallback: if Level 1 extracted no structured role info, include the
+        # first evidence quote (truncated). This gives the tracer concrete
+        # context for systems like databases that often have empty entity lists.
+        if not role_parts and node.evidence:
+            role_parts.append("context: " + node.evidence[0][:150].strip())
         role_suffix = (" — " + "; ".join(role_parts)) if role_parts else ""
         lines.append(f"- {node.canonical_name} — type: {node.category}{role_suffix}")
     return "\n".join(lines)

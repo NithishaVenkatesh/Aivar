@@ -1,8 +1,26 @@
 from __future__ import annotations
+import re
 from typing import List, Dict, Set, Tuple
 
 from ..models import SystemRelationship
 from .models import DataFlow, Gap, UseCaseResult
+
+# Phrases in evidence text that indicate a manual process, caught when the LLM
+# sets trigger=null instead of trigger="manual" (e.g. when the text describes
+# *what* the process is rather than *when* it runs).
+_MANUAL_EVIDENCE_RE = re.compile(
+    r"\b(manual(ly)?|exports?\s+csv|csv\s+export|by\s+hand|"
+    r"no\s+live\s+connect|no\s+automated)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_manual(rel: SystemRelationship) -> bool:
+    if rel.trigger == "manual":
+        return True
+    if rel.trigger is None and rel.evidence and _MANUAL_EVIDENCE_RE.search(rel.evidence):
+        return True
+    return False
 
 
 def _build_exists(relationships: List[SystemRelationship]) -> Set[Tuple[str, str]]:
@@ -10,16 +28,14 @@ def _build_exists(relationships: List[SystemRelationship]) -> Set[Tuple[str, str
     Build the set of system pairs that have an automated integration in Level 1.
 
     Two rules:
-    1. Manual trigger excluded — a manual process (CSV export, etc.) is not an
-       automated integration and must not mark a gap as available.
-    2. Direction-agnostic — both (A, B) and (B, A) are always added. Level 2 LLMs
-       may reverse the flow direction relative to how Level 1 stored it; if any
-       integration exists between two systems the gap is available regardless of
-       which direction was emitted.
+    1. Manual process excluded — checked via trigger field AND evidence text,
+       because LLMs sometimes set trigger=null when the evidence describes a
+       manual process without stating a schedule.
+    2. Direction-agnostic — both (A, B) and (B, A) are always added.
     """
     exists: Set[Tuple[str, str]] = set()
     for rel in relationships:
-        if rel.trigger == "manual":
+        if _is_manual(rel):
             continue
         exists.add((rel.source, rel.target))
         exists.add((rel.target, rel.source))
