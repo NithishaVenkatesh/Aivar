@@ -12,8 +12,8 @@ BASE_URL = "https://api.okta.com/v1"
 _LIST_URL = BASE_URL.rstrip("/") + "/" + "/users".lstrip("/")
 _CREATE_URL = BASE_URL.rstrip("/") + "/" + "/users".lstrip("/")
 
-MOCK_LIST_RESPONSE = {'users': [{'id': '00u12345', 'status': 'ACTIVE', 'created': '2022-01-01T12:00:00.000Z', 'activated': '2022-01-01T12:00:00.000Z', 'statusChanged': '2022-01-01T12:00:00.000Z', 'lastLogin': '2022-01-01T12:00:00.000Z', 'login': 'john.doe@example.com', 'email': 'john.doe@example.com', 'familyName': 'Doe', 'givenName': 'John', 'MiddleName': None, 'honorificPrefix': None, 'honorificSuffix': None, 'nickName': None, 'profileUrl': None, 'title': None, 'division': None, 'department': None, 'costCenter': None, 'employeeNumber': None, 'employeeType': None, 'secondEmail': None, '_links': {'self': {'href': 'https://your-okta-domain.okta.com/api/v1/users/00u12345'}}}]}
-_LIST_KEY = "users"
+MOCK_LIST_RESPONSE = {'value': [{'id': '00u1234', 'status': 'ACTIVE', 'created': '2021-05-12T14:30:00.000Z', 'activated': '2021-05-12T14:30:00.000Z', 'statusChanged': '2021-05-12T14:30:00.000Z', 'lastLogin': '2021-05-12T14:30:00.000Z', 'login': 'john.doe@example.com', 'email': 'john.doe@example.com', 'profile': {'firstName': 'John', 'lastName': 'Doe', 'nickName': 'JD', 'title': 'Engineer'}}]}
+_LIST_KEY = "value"
 
 # Terminal response: only the records array, no pagination-continuation fields.
 # Prevents the cursor/offset pagination loop from running forever in tests.

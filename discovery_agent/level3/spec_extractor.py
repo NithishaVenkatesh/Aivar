@@ -100,6 +100,16 @@ def extract_connector_spec(
             spec.api_base_url, normalized,
         )
         spec = spec.model_copy(update={"api_base_url": normalized})
+
+    # Enforce that 429 and 503 are always in retry_status_codes.
+    # The test template's test_retries_on_429 is mandatory — if the LLM returns []
+    # or omits these codes, the test is guaranteed to fail.
+    must_retry = {429, 503}
+    if not must_retry.issubset(set(spec.retry_status_codes)):
+        merged = sorted(must_retry | set(spec.retry_status_codes))
+        logger.warning("retry_status_codes %r missing 429/503 — merged to %r", spec.retry_status_codes, merged)
+        spec = spec.model_copy(update={"retry_status_codes": merged})
+
     return spec
 
 

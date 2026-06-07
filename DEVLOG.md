@@ -1,5 +1,27 @@
-# DEVLOG — Aivar Discovery Agent
+﻿# DEVLOG — Aivar Discovery Agent
 
+
+
+---
+
+### [2026-06-07] Level 3 — Paradigm classification, retry enforcement, gate propagation
+
+**Issues addressed from validator critique:**
+
+1. Root cause fixed: One REST-CRUD template applied to all systems regardless of paradigm. PostgreSQL is a database (requires psycopg2), Slack is a webhook target (requires chat.postMessage). Added paradigm classification gate before any LLM calls.
+2. Root cause fixed: Silent unvalidated LLM slot-fill for retry_status_codes. Added defense-in-depth enforcement at renderer level.
+3. Gate propagation verified: valid property correctly propagates test failures.
+
+**Changes:**
+- NEW discovery_agent/level3/classification.py: classify_gap() returns rest_api, database_source, or webhook_destination
+- discovery_agent/level3/models.py: Added paradigm, manual_setup_required, paradigm_notes to GeneratedBundle
+- discovery_agent/level3/pipeline.py: Paradigm gate before bundle_dir.mkdir and LLM calls
+- discovery_agent/level3/renderer.py: render_connector() re-checks and merges retry codes
+- frontend/app/page.tsx: Updated interface, 4-stat summary, MANUAL SETUP badge, conditional file viewer
+
+**Outcome:**
+- PostgreSQL to Slack: classified database_source, manual_setup_required=True, no code generated
+- Workday to Okta: classified rest_api, proceeds to LLM generation and validation gate
 ---
 
 ### [2026-06-07] Level 2 — Reverted "Fix 1/Fix 2" changes to restore pre-regression state
@@ -147,3 +169,4 @@ Full 8-stage pipeline:
 - `frontend/app/page.tsx`
 
 ---
+

@@ -59,6 +59,12 @@ class GeneratedBundle(BaseModel):
     requirements: str
     validation: ValidationReport
     artifacts_dir: Optional[str] = None
+    # Paradigm classification — set by pipeline.classify_gap() before generation.
+    # When manual_setup_required=True, no connector code is generated and the
+    # validation gate is not run; paradigm_notes explains why.
+    paradigm: str = "rest_api"
+    manual_setup_required: bool = False
+    paradigm_notes: str = ""
 
     def model_dump(self, **kwargs) -> Dict[str, Any]:
         d = super().model_dump(**kwargs)

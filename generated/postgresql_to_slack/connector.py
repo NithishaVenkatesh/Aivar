@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.postgresql.local/v1"
 LIST_ENDPOINT = "public.shipments"
 CREATE_ENDPOINT = "/shipments"
-RETRY_STATUSES = []
+RETRY_STATUSES = [429, 503]
 MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
 

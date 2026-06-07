@@ -6,6 +6,7 @@ from typing import List
 
 from ..models import InventoryOutput
 from ..level2.models import GapReport
+from .classification import classify_gap, get_paradigm_notes
 from .models import GeneratedBundle, ValidationReport
 from .spec_extractor import extract_connector_spec, extract_agent_spec
 from .renderer import (
@@ -46,6 +47,41 @@ def run(
     for i, gap in enumerate(missing_gaps, 1):
         gap_key = f"{gap.source_system} → {gap.destination_system}"
         logger.info(f"[{i}/{len(missing_gaps)}] Generating bundle for {gap_key}")
+
+        # --- Paradigm gate -------------------------------------------------------
+        # Detect whether this gap can be served by the REST-CRUD template before
+        # spending any LLM calls.  Database sources (psycopg2, pymongo …) and
+        # webhook-only destinations (Slack chat.postMessage …) cannot be expressed
+        # as a generic HTTP CRUD connector — generating one would produce code that
+        # is internally consistent but fundamentally wrong for the paradigm.
+        paradigm = classify_gap(gap.source_system, gap.destination_system)
+        if paradigm != 'rest_api':
+            notes = get_paradigm_notes(paradigm, gap.source_system, gap.destination_system)
+            logger.warning(
+                f"  Paradigm '{paradigm}' detected for {gap_key} — "
+                f"REST auto-generation skipped, marking manual_setup_required"
+            )
+            bundles.append(GeneratedBundle(
+                gap_key=gap_key,
+                source_system=gap.source_system,
+                destination_system=gap.destination_system,
+                connector_code="",
+                agent_def_yaml="",
+                test_code="",
+                readme=(
+                    f"# {gap_key}\n\n"
+                    f"## Manual Setup Required\n\n"
+                    f"{notes}\n"
+                ),
+                requirements="",
+                validation=ValidationReport(),
+                artifacts_dir=None,
+                paradigm=paradigm,
+                manual_setup_required=True,
+                paradigm_notes=notes,
+            ))
+            continue
+        # -------------------------------------------------------------------------
 
         bundle_dir = output_path / _slug(gap.source_system, gap.destination_system)
         bundle_dir.mkdir(parents=True, exist_ok=True)

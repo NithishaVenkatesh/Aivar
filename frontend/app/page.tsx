@@ -113,6 +113,9 @@ interface GeneratedBundle {
   requirements: string
   validation: ValidationReport
   artifacts_dir: string | null
+  paradigm: string
+  manual_setup_required: boolean
+  paradigm_notes: string
 }
 
 type L3State =
@@ -1092,28 +1095,31 @@ export default function HomePage() {
                   <div className="space-y-4">
                     {/* Summary + Download All */}
                     <div className="flex flex-wrap items-start gap-4">
-                      <div className="grid grid-cols-3 gap-4 flex-1">
+                      <div className="grid grid-cols-4 gap-4 flex-1">
                         {[
-                          { label: "Bundles Generated", value: l3Bundles.length },
-                          { label: "Passed Validation", value: l3Bundles.filter(b => b.validation.valid).length },
-                          { label: "Failed Validation", value: l3Bundles.filter(b => !b.validation.valid).length },
-                        ].map(({ label, value }) => (
+                          { label: "Bundles", value: l3Bundles.length, color: "text-slate-900" },
+                          { label: "Passed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700" },
+                          { label: "Failed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700" },
+                          { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700" },
+                        ].map(({ label, value, color }) => (
                           <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
-                            <p className="text-2xl font-bold text-slate-900">{value}</p>
+                            <p className={`text-2xl font-bold ${color}`}>{value}</p>
                             <p className="text-xs text-slate-500 mt-0.5">{label}</p>
                           </div>
                         ))}
                       </div>
-                      <button
-                        onClick={() => downloadAllBundles(l3Bundles)}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        Download All (.zip)
-                      </button>
+                      {l3Bundles.some(b => !b.manual_setup_required) && (
+                        <button
+                          onClick={() => downloadAllBundles(l3Bundles.filter(b => !b.manual_setup_required))}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          Download All (.zip)
+                        </button>
+                      )}
                     </div>
 
                     {/* Bundle cards */}
@@ -1123,42 +1129,60 @@ export default function HomePage() {
                         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                           <div className="font-medium text-slate-900">{bundle.gap_key}</div>
                           <div className="flex items-center gap-2">
-                            {bundle.validation.valid
-                              ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
-                              : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
+                            {bundle.manual_setup_required
+                              ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">MANUAL SETUP</span>
+                              : bundle.validation.valid
+                                ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
+                                : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
                             }
-                            <button
-                              onClick={() => downloadBundle(bundle)}
-                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                              </svg>
-                              .zip
-                            </button>
+                            {!bundle.manual_setup_required && (
+                              <button
+                                onClick={() => downloadBundle(bundle)}
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                .zip
+                              </button>
+                            )}
                           </div>
                         </div>
 
-                        {/* Validation checks */}
-                        <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
-                          {[
-                            { label: "Compiles", ok: bundle.validation.connector_compiles },
-                            { label: "Imports", ok: bundle.validation.connector_imports },
-                            { label: "YAML valid", ok: bundle.validation.agent_def_valid },
-                            { label: "Tests pass", ok: bundle.validation.tests_pass },
-                          ].map(({ label, ok }) => (
-                            <div key={label} className="flex items-center gap-1.5 text-xs">
-                              <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
-                                {ok ? "✓" : "✗"}
-                              </span>
-                              <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
-                            </div>
-                          ))}
-                        </div>
+                        {/* Paradigm note — shown instead of validation checks for manual bundles */}
+                        {bundle.manual_setup_required && bundle.paradigm_notes && (
+                          <div className="px-4 py-3 bg-amber-50 border-b border-slate-100">
+                            <p className="text-xs font-semibold text-amber-800 mb-1">
+                              Why auto-generation was skipped ({bundle.paradigm.replace('_', ' ')}):
+                            </p>
+                            <p className="text-xs text-amber-700 leading-relaxed whitespace-pre-wrap">
+                              {bundle.paradigm_notes}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Validation checks — only shown for REST connectors */}
+                        {!bundle.manual_setup_required && (
+                          <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
+                            {[
+                              { label: "Compiles", ok: bundle.validation.connector_compiles },
+                              { label: "Imports", ok: bundle.validation.connector_imports },
+                              { label: "YAML valid", ok: bundle.validation.agent_def_valid },
+                              { label: "Tests pass", ok: bundle.validation.tests_pass },
+                            ].map(({ label, ok }) => (
+                              <div key={label} className="flex items-center gap-1.5 text-xs">
+                                <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
+                                  {ok ? "✓" : "✗"}
+                                </span>
+                                <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
                         {/* Failure details */}
-                        {bundle.validation.failures.length > 0 && (
+                        {!bundle.manual_setup_required && bundle.validation.failures.length > 0 && (
                           <div className="px-4 py-3 bg-red-50 border-b border-slate-100">
                             <p className="text-xs font-medium text-red-700 mb-1.5">Failure details:</p>
                             <ul className="space-y-1">
@@ -1169,52 +1193,55 @@ export default function HomePage() {
                           </div>
                         )}
 
-                        {/* File viewer toggle */}
-                        <button
-                          onClick={() => {
-                            setExpandedBundle(expandedBundle === i ? null : i)
-                            setBundleFileTab("connector")
-                          }}
-                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
-                        >
-                          <span className="font-medium">View generated files</span>
-                          <svg
-                            className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
-                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                          >
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          </svg>
-                        </button>
+                        {/* File viewer toggle — only for REST connectors with generated code */}
+                        {!bundle.manual_setup_required && (
+                          <>
+                            <button
+                              onClick={() => {
+                                setExpandedBundle(expandedBundle === i ? null : i)
+                                setBundleFileTab("connector")
+                              }}
+                              className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                            >
+                              <span className="font-medium">View generated files</span>
+                              <svg
+                                className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
+                                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
 
-                        {/* File viewer */}
-                        {expandedBundle === i && (
-                          <div className="border-t border-slate-100">
-                            <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
-                              {([
-                                { key: "connector",    label: "connector.py" },
-                                { key: "agent_def",    label: "agent_def.yaml" },
-                                { key: "tests",        label: "test_connector.py" },
-                                { key: "requirements", label: "requirements.txt" },
-                                { key: "readme",       label: "README.md" },
-                              ] as const).map(({ key, label }) => (
-                                <button
-                                  key={key}
-                                  onClick={() => setBundleFileTab(key)}
-                                  className={`px-3 py-1 rounded text-xs font-mono transition-colors
-                                    ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                                >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                            <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
-                              {bundleFileTab === "connector"    ? bundle.connector_code
-                                : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
-                                : bundleFileTab === "tests"        ? bundle.test_code
-                                : bundleFileTab === "requirements" ? bundle.requirements
-                                : bundle.readme}
-                            </pre>
-                          </div>
+                            {expandedBundle === i && (
+                              <div className="border-t border-slate-100">
+                                <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
+                                  {([
+                                    { key: "connector",    label: "connector.py" },
+                                    { key: "agent_def",    label: "agent_def.yaml" },
+                                    { key: "tests",        label: "test_connector.py" },
+                                    { key: "requirements", label: "requirements.txt" },
+                                    { key: "readme",       label: "README.md" },
+                                  ] as const).map(({ key, label }) => (
+                                    <button
+                                      key={key}
+                                      onClick={() => setBundleFileTab(key)}
+                                      className={`px-3 py-1 rounded text-xs font-mono transition-colors
+                                        ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                                <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
+                                  {bundleFileTab === "connector"    ? bundle.connector_code
+                                    : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
+                                    : bundleFileTab === "tests"        ? bundle.test_code
+                                    : bundleFileTab === "requirements" ? bundle.requirements
+                                    : bundle.readme}
+                                </pre>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     ))}

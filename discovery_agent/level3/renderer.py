@@ -37,6 +37,18 @@ def _to_class_name(source: str, destination: str) -> str:
 
 
 def render_connector(spec: ConnectorSpec) -> str:
+    # Defense-in-depth: spec_extractor already enforces this, but re-check at
+    # render time so a misconfigured spec can never silently produce a connector
+    # whose test_retries_on_429 is guaranteed to fail.
+    required_retry = {429, 503}
+    if not required_retry.issubset(set(spec.retry_status_codes)):
+        merged = sorted(required_retry | set(spec.retry_status_codes))
+        logger.warning(
+            "render_connector: retry_status_codes %r missing 429/503 — merged to %r",
+            spec.retry_status_codes, merged,
+        )
+        spec = spec.model_copy(update={"retry_status_codes": merged})
+
     tmpl = _ENV.get_template("connector.py.j2")
     ctx = spec.model_dump()
     ctx["class_name"] = _to_class_name(spec.source_system, spec.destination_system)
