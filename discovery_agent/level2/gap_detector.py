@@ -7,18 +7,22 @@ from .models import DataFlow, Gap, UseCaseResult
 
 def _build_exists(relationships: List[SystemRelationship]) -> Set[Tuple[str, str]]:
     """
-    Build the set of directed edges that exist in the Level 1 graph.
+    Build the set of system pairs that have an automated integration in Level 1.
 
-    Unidirectional relationships contribute one ordered pair (source, target).
-    Bidirectional relationships contribute both (source, target) and (target, source).
-
-    The result is a pure EXISTS set — status derivation never touches the LLM output.
+    Two rules:
+    1. Manual trigger excluded — a manual process (CSV export, etc.) is not an
+       automated integration and must not mark a gap as available.
+    2. Direction-agnostic — both (A, B) and (B, A) are always added. Level 2 LLMs
+       may reverse the flow direction relative to how Level 1 stored it; if any
+       integration exists between two systems the gap is available regardless of
+       which direction was emitted.
     """
     exists: Set[Tuple[str, str]] = set()
     for rel in relationships:
+        if rel.trigger == "manual":
+            continue
         exists.add((rel.source, rel.target))
-        if rel.direction == "bidirectional":
-            exists.add((rel.target, rel.source))
+        exists.add((rel.target, rel.source))
     return exists
 
 

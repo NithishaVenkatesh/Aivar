@@ -68,7 +68,7 @@ def _build_inventory_block(nodes: List[SystemNode]) -> str:
         if node.business_processes:
             role_parts.append("processes: " + ", ".join(node.business_processes))
         role_suffix = (" — " + "; ".join(role_parts)) if role_parts else ""
-        lines.append(f"- {node.canonical_name} ({node.category}){role_suffix}")
+        lines.append(f"- {node.canonical_name} — type: {node.category}{role_suffix}")
     return "\n".join(lines)
 
 

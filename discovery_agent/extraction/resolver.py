@@ -82,6 +82,17 @@ _VENDOR_PREFIXES = re.compile(
     re.IGNORECASE,
 )
 
+# Words that carry no identity signal and are dropped before token-subset comparison.
+# Company qualifiers ("associates", "inc") and generic type words ("system", "platform").
+_GENERIC_TOKENS: frozenset[str] = frozenset({
+    "inc", "incorporated", "corp", "corporation", "ltd", "limited", "llc",
+    "associates", "holdings",
+    "system", "systems", "platform", "platforms",
+    "service", "services", "solution", "solutions",
+    "application", "applications", "tool", "tools",
+    "the", "and", "of", "a",
+})
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -141,13 +152,26 @@ def _group_by_similarity(mentions: List[SystemMention]) -> List[List[SystemMenti
     return groups
 
 
+def _token_set(name: str) -> frozenset[str]:
+    """Lowercase tokens with generic words removed."""
+    return frozenset(t for t in name.lower().split() if t not in _GENERIC_TOKENS)
+
+
 def _should_merge(a: SystemMention, b: SystemMention) -> bool:
-    # Compare stripped names so "Apache Kafka" and "Kafka" both become "kafka"
+    # 1. Token-subset check — deterministic, no threshold.
+    #    "Manhattan Associates WMS" → {manhattan, wms}
+    #    "Manhattan WMS"            → {manhattan, wms}
+    #    One set ⊆ the other and they share a distinctive token → merge.
+    ta = _token_set(a.name)
+    tb = _token_set(b.name)
+    if ta and tb and (ta <= tb or tb <= ta):
+        return True
+
+    # 2. Fuzzy fallback — handles typos and spacing variants.
     key_a = _comparison_key(a.name)
     key_b = _comparison_key(b.name)
-    similarity = fuzz.token_sort_ratio(key_a, key_b)
     same_category = a.category.lower() == b.category.lower()
-    return similarity >= SIMILARITY_THRESHOLD and same_category
+    return fuzz.token_sort_ratio(key_a, key_b) >= SIMILARITY_THRESHOLD and same_category
 
 
 # ---------------------------------------------------------------------------
