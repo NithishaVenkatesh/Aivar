@@ -84,4 +84,11 @@ def render_readme(spec: ConnectorSpec) -> str:
     tmpl = _ENV.get_template("README.md.j2")
     ctx = spec.model_dump()
     ctx["class_name"] = _to_class_name(spec.source_system, spec.destination_system)
+    # Build a {field: value} lookup for the "Verify before deploying" section.
+    # Only fields that exist in the spec dict are included; unrecognized names
+    # (LLM hallucinated field names) map to "(unknown)".
+    ctx["inferred_values"] = {
+        field: str(ctx.get(field, "(unknown)"))
+        for field in (spec.inferred_fields or [])
+    }
     return tmpl.render(**ctx)

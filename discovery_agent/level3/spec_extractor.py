@@ -34,6 +34,11 @@ RULES:
 9. create_endpoint: the POST endpoint to create the entity.
 10. mock_list_response: a realistic mock response body with 1-2 example records matching the real API schema.
 11. auth_notes: 1-2 sentences describing what credentials are needed and how to obtain them.
+12. inferred_fields: list the snake_case field names whose values you inferred from general API
+    knowledge rather than the provided system inventory. Be honest — if you guessed a value,
+    include its field name here. Common candidates: api_base_url, pagination_cursor_field,
+    auth_type, list_response_key. An engineer will use this list to verify the values against
+    the live API docs before deploying.
 """
 
 
@@ -118,8 +123,10 @@ You are generating an agent definition YAML for an enterprise integration.
 
 Produce a concise, realistic agent definition with:
 - system_prompt: 3-5 sentences explaining the agent's role and responsibilities.
-- tools: 4-6 tool names the agent needs (use the connector methods: list_records,
-  get_record, create_record, update_record; plus utilities like log_event, handle_error).
+- tools: 4-6 tool names the agent needs. Use entity-specific connector method names —
+  list_{entity}s, get_{entity}, create_{entity}, update_{entity} — where {entity} is the
+  actual entity name given in the user message (e.g. list_leads, get_lead, not list_records).
+  Add utilities like log_event and handle_error as needed.
 - workflow: 4-7 ordered steps describing the end-to-end automation flow (plain English).
 - test_scenarios: 3-5 concrete test scenarios covering happy path, error cases, and edge cases.
 

@@ -43,6 +43,7 @@ def run(
     output_path.mkdir(parents=True, exist_ok=True)
 
     bundles: List[GeneratedBundle] = []
+    node_map = {n.canonical_name: n for n in inventory.systems}
 
     for i, gap in enumerate(missing_gaps, 1):
         gap_key = f"{gap.source_system} → {gap.destination_system}"
@@ -50,11 +51,14 @@ def run(
 
         # --- Paradigm gate -------------------------------------------------------
         # Detect whether this gap can be served by the REST-CRUD template before
-        # spending any LLM calls.  Database sources (psycopg2, pymongo …) and
-        # webhook-only destinations (Slack chat.postMessage …) cannot be expressed
+        # spending any LLM calls.  Database sources (psycopg2, pymongo …),
+        # webhook-only destinations (Slack chat.postMessage …), and identity /
+        # SSO systems (Okta SCIM, Azure AD, SAML-auth targets …) cannot be expressed
         # as a generic HTTP CRUD connector — generating one would produce code that
         # is internally consistent but fundamentally wrong for the paradigm.
-        paradigm = classify_gap(gap.source_system, gap.destination_system)
+        src_node = node_map.get(gap.source_system)
+        dst_node = node_map.get(gap.destination_system)
+        paradigm = classify_gap(gap.source_system, gap.destination_system, src_node, dst_node)
         if paradigm != 'rest_api':
             notes = get_paradigm_notes(paradigm, gap.source_system, gap.destination_system)
             logger.warning(

@@ -4,6 +4,30 @@
 
 ---
 
+### [2026-06-07] Level 3 — SCIM/identity paradigm, inferred-field disclosure, entity-specific CRUD names
+
+**Issues addressed:**
+
+1. Root cause fixed: Okta/SAML/SSO systems were falling through to `rest_api` paradigm, generating a fake bearer-token REST connector instead of a SCIM/provisioning stub. Added `scim_or_manual` paradigm to classification.py, detected via destination auth_method ("saml"), category ("identity", "sso"), or known IDENTITY_SYSTEMS name set.
+2. Root cause fixed: LLM-inferred values (base URL, pagination field, auth type) presented as verified facts with no disclosure. Added `inferred_fields: List[str]` to ConnectorSpec — LLM populates it, README renders a "⚠️ Verify before deploying" section listing each guessed value for engineer review.
+3. Root cause fixed: CRUD method names were generic (`list_records`, `get_record`) regardless of entity. Templates now use entity-specific names (`list_leads`, `get_lead`) derived from `entity_name`.
+4. pipeline.py now looks up SystemNode objects from the inventory before calling classify_gap(), enabling auth_method and category metadata to inform paradigm detection.
+
+**Changes:**
+- discovery_agent/level3/classification.py: Added IDENTITY_SYSTEMS frozenset, scim_or_manual paradigm, updated classify_gap() signature to accept optional src_node/dst_node, added scim_or_manual notes
+- discovery_agent/level3/models.py: Added inferred_fields: List[str] to ConnectorSpec
+- discovery_agent/level3/spec_extractor.py: Added inferred_fields instruction to connector prompt; updated agent prompt to use entity-specific tool names
+- discovery_agent/level3/renderer.py: render_readme() builds inferred_values dict from spec for template
+- discovery_agent/level3/pipeline.py: Build node_map from inventory, pass src_node/dst_node to classify_gap
+- templates/connector.py.j2: list_records→list_{{entity}}s, get_record→get_{{entity}}, etc.
+- templates/test_connector.py.j2: All test method calls updated to entity-specific names
+- templates/README.md.j2: Added ⚠️ Verify before deploying section + entity-specific usage examples
+
+**Outcome:**
+- Workday→Okta: classified scim_or_manual, manual_setup_required=True, SCIM provisioning README generated instead of REST connector
+- Salesforce→Zendesk: rest_api, list_leads/create_lead method names, inferred_fields section in README showing verified values
+---
+
 ### [2026-06-07] Level 3 — Paradigm classification, retry enforcement, gate propagation
 
 **Issues addressed from validator critique:**

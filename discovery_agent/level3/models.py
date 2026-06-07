@@ -21,6 +21,10 @@ class ConnectorSpec(BaseModel):
     create_endpoint: str
     mock_list_response: Dict[str, Any]
     retry_status_codes: List[int] = Field(default_factory=lambda: [429, 503])
+    # Field names whose values the LLM inferred from general API knowledge rather
+    # than the provided inventory documents.  Rendered in the README as a
+    # "Verify before deploying" section so engineers know what to validate.
+    inferred_fields: List[str] = Field(default_factory=list)
 
 
 class AgentDefSpec(BaseModel):

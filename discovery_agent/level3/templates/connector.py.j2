@@ -58,7 +58,7 @@ class {{ class_name }}:
             last_resp.raise_for_status()
         raise RuntimeError("Unexpected state in _request")
 
-    def list_records(self, **params: Any) -> List[Dict[str, Any]]:
+    def list_{{ entity_name }}s(self, **params: Any) -> List[Dict[str, Any]]:
         """Return all {{ entity_name }} records with {{ pagination_style }} pagination."""
         records: List[Dict[str, Any]] = []
 {% if pagination_style == "cursor" %}
@@ -100,14 +100,14 @@ class {{ class_name }}:
 {% endif %}
         return records
 
-    def get_record(self, record_id: str) -> Dict[str, Any]:
-        """Fetch a single {{ entity_name }} record by ID."""
+    def get_{{ entity_name }}(self, record_id: str) -> Dict[str, Any]:
+        """Fetch a single {{ entity_name }} by ID."""
         return self._request("GET", LIST_ENDPOINT + "/" + record_id).json()
 
-    def create_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new {{ entity_name }} record."""
+    def create_{{ entity_name }}(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new {{ entity_name }}."""
         return self._request("POST", CREATE_ENDPOINT, json=payload).json()
 
-    def update_record(self, record_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Update an existing {{ entity_name }} record by ID."""
+    def update_{{ entity_name }}(self, record_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Update an existing {{ entity_name }} by ID."""
         return self._request("PATCH", LIST_ENDPOINT + "/" + record_id, json=payload).json()
