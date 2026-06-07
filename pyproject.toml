@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "discovery-agent"
+version = "0.1.0"
+description = "Enterprise system discovery agent — extracts systems from documents"
+authors = []
+readme = "README.md"
+packages = [{ include = "discovery_agent" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+docling = "*"
+instructor = "*"
+groq = "*"
+networkx = "*"
+pandas = "*"
+openpyxl = "*"
+pydantic = "^2"
+python-dotenv = "*"
+rich = "*"
+rapidfuzz = "*"
+Pillow = "*"
+
+[tool.poetry.scripts]
+discover = "discovery_agent.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
