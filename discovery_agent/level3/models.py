@@ -14,7 +14,7 @@ class ConnectorSpec(BaseModel):
     auth_notes: str
     list_endpoint: str
     list_response_key: str
-    pagination_style: Literal["cursor", "offset", "page", "none"]
+    pagination_style: Literal["cursor", "offset", "page", "none", "link_header"]
     pagination_cursor_field: str = "next_cursor"
     rate_limit_header: str = "Retry-After"
     entity_name: str

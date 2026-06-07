@@ -4,6 +4,66 @@
 
 ---
 
+### [2026-06-07] Level 3 — AC8 production-readiness fix (Okta connector ~12% wrong lines)
+
+**Problem:** Acceptance criterion AC8 requires <10% of generated connector lines requiring significant changes. Okta connector was 87 lines with ~10–11 lines needing changes (≈12% — above threshold). Six distinct issues:
+
+1. BASE_URL hardcoded as a Python string literal — tenant-specific URLs (Okta, Zendesk, Salesforce) need to be configurable without code changes.
+2. Auth header prefix was `Bearer` — Okta API tokens use `SSWS` prefix, not `Bearer`.
+3. `link_header` pagination not supported — Okta uses RFC 5988 Link response headers, but template only had cursor/offset/page/none branches.
+4. Bare JSON array response not handled — Okta `/api/v1/users` returns a raw array with no wrapper key, but template always called `.get("key", [])`.
+5. `delete_{entity}` method missing — four CRUD verbs present (list/get/create/update) but DELETE was absent.
+6. No deterministic correction for LLM-guessed values on well-known APIs.
+
+**Root causes (two independent issues):**
+
+- **Structural gaps in the template**: `connector.py.j2` had no `link_header` branch, no `delete_` method, and no env-var BASE_URL pattern. These are structural — every Okta connector would fail them regardless of LLM quality.
+- **LLM value drift**: For well-known APIs, the LLM occasionally picks wrong auth prefixes, pagination styles, etc. No deterministic correction was applied after the LLM call.
+
+**Fixes:**
+
+A. `discovery_agent/level3/models.py` — Added `"link_header"` to `pagination_style` Literal.
+
+B. `discovery_agent/level3/spec_extractor.py`:
+- Updated `_CONNECTOR_SYSTEM_PROMPT` with explicit rules for tenant URLs, SSWS prefix, `link_header` style, bare-array `list_response_key = ""`, and `inferred_fields`.
+- Added `_norm_dest()` helper for normalized substring matching.
+- Added `_SYSTEM_OVERRIDES` dict (10 entries: okta, zendesk, github, gitlab, jira, salesforce, marketo, hubspot, workday) — deterministic corrections for auth prefix, pagination style, auth type.
+- Added `_apply_overrides(spec, destination)` — applies first matching override after LLM call, removes overridden fields from `inferred_fields`.
+- Wired `_apply_overrides()` as the last step in `extract_connector_spec()`.
+
+C. `discovery_agent/level3/templates/connector.py.j2` (full rewrite, no existing branch removed):
+- `import os` added.
+- `BASE_URL` changed from string literal to `os.environ.get("DEST_BASE_URL", "{{ api_base_url }}")` — env var name derived via Jinja2 filter chain `upper | replace(' ', '_') | replace('-', '_')`.
+- Added `{% elif pagination_style == "link_header" %}` branch: follows RFC 5988 `resp.links.get("next")`, handles bare arrays with `isinstance(data, list)` guard, uses `session.request()` directly for next-page requests (absolute URL).
+- Added `delete_{{ entity_name }}(self, record_id)` method — issues DELETE to `LIST_ENDPOINT + "/" + record_id`.
+
+D. `discovery_agent/level3/templates/test_connector.py.j2`:
+- Added `test_delete_{{ entity_name }}_sends_request` test — registers DELETE mock at `_LIST_URL + "/test-id"` with status 204, asserts single call with method == "DELETE".
+
+**Regression safety:**
+- All new template code is additive (`{% elif %}` branch, new method at end of class — no existing branches or methods modified).
+- `link_header` branch handles both wrapped and bare array responses; falls back gracefully.
+- `BASE_URL` env-var falls back to `{{ api_base_url }}` when env var not set — tests (which don't set env vars) continue using the mock URL unchanged.
+- `delete_` method returns `None`; 204 responses pass `raise_for_status()` cleanly; return value discarded.
+- `_apply_overrides` uses substring match — cannot match unrelated systems.
+
+---
+
+### [2026-06-07] Level 3 — Stale bundle display fix
+
+**Root cause:** UI showed manual-setup cards from a previous run's dataset (Workday→Okta, PostgreSQL→Slack) instead of the current run's gaps (Stripe→Slack, BambooHR→Okta). The Reset button in page.tsx reset L1 and L2 state but never touched l3State. After Reset → new L1 → new L2, the Level 3 section rendered with l2Report from the new run but l3Bundles still derived from the stale l3State.phase === "done". The UI displayed old bundles until the user manually clicked "Generate Connectors" again.
+
+**Investigation findings:**
+1. No hardcoded gap pairs in level3/ — all system name strings are in comments/prompt examples only.
+2. run_level3.py reads sys.argv[1/2], route.ts passes current session's l1/l2 state — input path is correct.
+3. pipeline.py never cleared generated/ between runs — stale on-disk directories accumulated (real issue but not what caused the UI display bug).
+4. ACTUAL CAUSE: page.tsx Reset button omitted setL3State. runGapAnalysis() also left l3State untouched, so old bundles remained in "done" state through the new L1+L2 run.
+
+**Fixes:**
+- frontend/app/page.tsx: Reset button now calls setL3State({phase:"idle"}) + setExpandedBundle(null); runGapAnalysis() does the same at the start of each new analysis
+- discovery_agent/level3/pipeline.py: Added shutil.rmtree(output_path) before mkdir at pipeline start so stale on-disk bundles from a prior dataset are always cleared
+---
+
 ### [2026-06-07] Level 3 — SCIM/identity paradigm, inferred-field disclosure, entity-specific CRUD names
 
 **Issues addressed:**

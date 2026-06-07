@@ -17,22 +17,24 @@ Given a source system and destination system, produce a realistic, accurate conn
 
 RULES:
 1. api_base_url: use the real production base URL for the system (e.g. "https://rest.salesforce.com/services/data/v59.0").
-   If unsure, use a realistic placeholder like "https://api.{system-slug}.com/v1".
+   Tenant-specific systems (Okta, Zendesk, Salesforce): use the real template form, e.g.
+   "https://{org}.okta.com/api/v1" or "https://{subdomain}.zendesk.com/api/v2".
 2. auth_type: use the system's actual auth mechanism.
    Salesforce → oauth2_client_credentials. Marketo → oauth2_client_credentials.
-   Okta → bearer. Workday → basic. Slack → bearer. Zendesk → bearer or api_key.
-   NetSuite → oauth2_client_credentials. PostgreSQL → basic (db credentials not HTTP).
-   Tableau → bearer. For PostgreSQL (a database, not an HTTP API): set api_base_url to
-   "postgresql://host:5432/dbname", auth_type to "basic", auth_notes to explain it uses
-   a database driver (psycopg2), and set list_endpoint to the table name.
-3. auth_header_name: for bearer → "Authorization". For api_key → the real header name (e.g. "X-API-Key").
-4. auth_header_prefix: for bearer → "Bearer ". For api_key → "". For basic → "Basic ".
-5. list_endpoint: the real REST endpoint path for listing the entity (e.g. "/leads.json").
-6. list_response_key: the JSON key in the response body that contains the array (e.g. "result", "records", "data").
-7. pagination_style: cursor / offset / page / none — use what the real API uses.
+   Okta → bearer (API token, NOT SAML). Workday → basic. Slack → bearer. Zendesk → api_key.
+   NetSuite → oauth2_client_credentials. Tableau → bearer.
+3. auth_header_name: for bearer → "Authorization". For api_key → the real header name (e.g. "X-Zendesk-Token").
+4. auth_header_prefix: for bearer/api_key → use the REAL prefix.
+   Okta API tokens use "SSWS " (not "Bearer "). Most others use "Bearer ".
+5. list_endpoint: the real REST endpoint path for listing the entity (e.g. "/api/v1/users").
+6. list_response_key: the JSON key in the response body that contains the array (e.g. "result", "records").
+   If the API returns a bare JSON array (no wrapper), use an empty string "".
+7. pagination_style: cursor / offset / page / none / link_header — use what the real API uses.
+   Okta, GitHub, GitLab, Jira use link_header (RFC 5988 Link response headers).
 8. entity_name: the primary data entity (singular noun, no spaces, e.g. "lead", "employee", "invoice").
 9. create_endpoint: the POST endpoint to create the entity.
 10. mock_list_response: a realistic mock response body with 1-2 example records matching the real API schema.
+    If the API returns a bare array, use {"": [...]} to represent it (list_response_key = "").
 11. auth_notes: 1-2 sentences describing what credentials are needed and how to obtain them.
 12. inferred_fields: list the snake_case field names whose values you inferred from general API
     knowledge rather than the provided system inventory. Be honest — if you guessed a value,
@@ -40,6 +42,78 @@ RULES:
     auth_type, list_response_key. An engineer will use this list to verify the values against
     the live API docs before deploying.
 """
+
+
+# ---------------------------------------------------------------------------
+# Known-system overrides — applied deterministically after the LLM call.
+# The LLM is correct about structure and CRUD shape; these override only the
+# specific values that LLMs systematically get wrong for well-known APIs.
+# Fields listed here are removed from inferred_fields automatically because
+# they are no longer guesses — they are verified reference values.
+# ---------------------------------------------------------------------------
+
+def _norm_dest(name: str) -> str:
+    return name.lower().replace(" ", "_").replace("-", "_")
+
+
+_SYSTEM_OVERRIDES: dict[str, dict] = {
+    "okta": {
+        "auth_header_prefix": "SSWS ",
+        "pagination_style": "link_header",
+    },
+    "zendesk": {
+        "auth_type": "api_key",
+        "auth_header_name": "X-Zendesk-Token",
+        "auth_header_prefix": "",
+        "pagination_style": "cursor",
+    },
+    "github": {
+        "pagination_style": "link_header",
+        "auth_header_prefix": "Bearer ",
+    },
+    "gitlab": {
+        "pagination_style": "link_header",
+    },
+    "jira": {
+        "pagination_style": "offset",
+    },
+    "salesforce": {
+        "auth_type": "oauth2_client_credentials",
+        "pagination_style": "offset",
+    },
+    "marketo": {
+        "auth_type": "oauth2_client_credentials",
+        "pagination_style": "offset",
+    },
+    "hubspot": {
+        "pagination_style": "cursor",
+    },
+    "workday": {
+        "auth_type": "basic",
+        "pagination_style": "offset",
+    },
+}
+
+
+def _apply_overrides(spec: ConnectorSpec, destination: str) -> ConnectorSpec:
+    """
+    Apply deterministic API-specific corrections after the LLM call.
+    First matching key wins (substring match on normalized destination name).
+    Overridden fields are removed from inferred_fields since they are now verified.
+    """
+    key = _norm_dest(destination)
+    for sys_key, overrides in _SYSTEM_OVERRIDES.items():
+        if sys_key in key:
+            spec = spec.model_copy(update=overrides)
+            overridden_names = set(overrides.keys())
+            cleaned = [f for f in spec.inferred_fields if f not in overridden_names]
+            if len(cleaned) != len(spec.inferred_fields):
+                spec = spec.model_copy(update={"inferred_fields": cleaned})
+            logger.info(
+                f"  Applied {sys_key} overrides: {sorted(overridden_names)}"
+            )
+            return spec
+    return spec
 
 
 def extract_connector_spec(
@@ -114,6 +188,10 @@ def extract_connector_spec(
         merged = sorted(must_retry | set(spec.retry_status_codes))
         logger.warning("retry_status_codes %r missing 429/503 — merged to %r", spec.retry_status_codes, merged)
         spec = spec.model_copy(update={"retry_status_codes": merged})
+
+    # Apply deterministic known-system overrides last so they take precedence
+    # over both the LLM values and the earlier normalization steps.
+    spec = _apply_overrides(spec, gap.destination_system)
 
     return spec
 

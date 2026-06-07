@@ -1,45 +1,45 @@
 """
-Tests for {{ class_name }}.
+Tests for OktaToBookingFrontendConnector.
 All HTTP calls are mocked via the `responses` library — no real API calls made.
 """
 import pytest
 import responses as resp_lib
 from requests.exceptions import HTTPError
 
-from connector import {{ class_name }}
+from connector import OktaToBookingFrontendConnector
 
-BASE_URL = "{{ api_base_url }}"
-_LIST_URL = BASE_URL.rstrip("/") + "/" + "{{ list_endpoint }}".lstrip("/")
-_CREATE_URL = BASE_URL.rstrip("/") + "/" + "{{ create_endpoint }}".lstrip("/")
+BASE_URL = "https://{org}.okta.com/api/v1"
+_LIST_URL = BASE_URL.rstrip("/") + "/" + "/api/v1/users".lstrip("/")
+_CREATE_URL = BASE_URL.rstrip("/") + "/" + "/api/v1/users".lstrip("/")
 
-MOCK_LIST_RESPONSE = {{ mock_list_response | to_python_repr }}
-_LIST_KEY = "{{ list_response_key }}"
+MOCK_LIST_RESPONSE = {'': [{'id': '00uuk2mgz6Ft6KsW45d6', 'status': 'ACTIVE', 'createdAt': '2022-01-01T12:00:00.000Z', 'activated': None, 'statusChanged': '2022-01-01T12:00:00.000Z', 'lastName': 'Doe', 'firstName': 'John', 'email': 'john.doe@example.com', 'login': 'john.doe@example.com', 'organization': None, 'profile': {}}, {'id': '00uuk2mgz6Ft6KsW45d7', 'status': 'ACTIVE', 'createdAt': '2022-01-02T12:00:00.000Z', 'activated': None, 'statusChanged': '2022-01-02T12:00:00.000Z', 'lastName': 'Smith', 'firstName': 'Jane', 'email': 'jane.smith@example.com', 'login': 'jane.smith@example.com', 'organization': None, 'profile': {}}]}
+_LIST_KEY = ""
 
 # Terminal response: only the records array, no pagination-continuation fields.
 # Prevents the cursor/offset pagination loop from running forever in tests.
 _TERMINAL_LIST_RESPONSE = {_LIST_KEY: MOCK_LIST_RESPONSE.get(_LIST_KEY, [])}
 
 
-def _make_client() -> {{ class_name }}:
-    return {{ class_name }}(api_token="test-token")
+def _make_client() -> OktaToBookingFrontendConnector:
+    return OktaToBookingFrontendConnector(api_token="test-token")
 
 
 @resp_lib.activate
-def test_list_{{ entity_name }}s_returns_items():
+def test_list_staffs_returns_items():
     resp_lib.add(resp_lib.GET, _LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_client()
-    result = client.list_{{ entity_name }}s()
+    result = client.list_staffs()
     assert isinstance(result, list)
     assert result == _TERMINAL_LIST_RESPONSE.get(_LIST_KEY, [])
 
 
 @resp_lib.activate
-def test_create_{{ entity_name }}_sends_payload():
-    payload = {"name": "test-{{ entity_name }}"}
+def test_create_staff_sends_payload():
+    payload = {"name": "test-staff"}
     created = {"id": "new-id", **payload}
     resp_lib.add(resp_lib.POST, _CREATE_URL, json=created, status=201)
     client = _make_client()
-    result = client.create_{{ entity_name }}(payload)
+    result = client.create_staff(payload)
     assert result.get("id") == "new-id"
     assert len(resp_lib.calls) == 1
     assert resp_lib.calls[0].request.method == "POST"
@@ -50,17 +50,17 @@ def test_raises_on_server_error():
     resp_lib.add(resp_lib.GET, _LIST_URL, json={"error": "not found"}, status=404)
     client = _make_client()
     with pytest.raises(HTTPError):
-        client.list_{{ entity_name }}s()
+        client.list_staffs()
 
 
 @resp_lib.activate
-def test_delete_{{ entity_name }}_sends_request():
+def test_delete_staff_sends_request():
     record_id = "test-id"
     resp_lib.add(
         resp_lib.DELETE, _LIST_URL.rstrip("/") + "/" + record_id, status=204,
     )
     client = _make_client()
-    client.delete_{{ entity_name }}(record_id)
+    client.delete_staff(record_id)
     assert len(resp_lib.calls) == 1
     assert resp_lib.calls[0].request.method == "DELETE"
 
@@ -74,7 +74,7 @@ def test_retries_on_429():
     )
     resp_lib.add(resp_lib.GET, _LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_client()
-    result = client.list_{{ entity_name }}s()
+    result = client.list_staffs()
     assert isinstance(result, list)
     assert len(resp_lib.calls) == 2, (
         f"Expected 2 calls (1 retry), got {len(resp_lib.calls)} — retry logic may be missing"

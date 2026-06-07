@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import List
 
@@ -40,7 +41,11 @@ def run(
     logger.info(f"Level 3 pipeline — {len(missing_gaps)} missing gap(s) to generate for")
 
     output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # Clear any bundles from a previous run so stale directories from a different
+    # dataset cannot be confused with this run's output.
+    if output_path.exists():
+        shutil.rmtree(output_path)
+    output_path.mkdir(parents=True)
 
     bundles: List[GeneratedBundle] = []
     node_map = {n.canonical_name: n for n in inventory.systems}

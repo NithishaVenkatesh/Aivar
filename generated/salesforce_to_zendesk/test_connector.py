@@ -1,45 +1,45 @@
 """
-Tests for PostgresqlToSlackConnector.
+Tests for SalesforceToZendeskConnector.
 All HTTP calls are mocked via the `responses` library — no real API calls made.
 """
 import pytest
 import responses as resp_lib
 from requests.exceptions import HTTPError
 
-from connector import PostgresqlToSlackConnector
+from connector import SalesforceToZendeskConnector
 
-BASE_URL = "https://api.postgresql.local/v1"
-_LIST_URL = BASE_URL.rstrip("/") + "/" + "public.shipments".lstrip("/")
-_CREATE_URL = BASE_URL.rstrip("/") + "/" + "/shipments".lstrip("/")
+BASE_URL = "https://{subdomain}.zendesk.com/api/v2"
+_LIST_URL = BASE_URL.rstrip("/") + "/" + "/users.json".lstrip("/")
+_CREATE_URL = BASE_URL.rstrip("/") + "/" + "/users.json".lstrip("/")
 
-MOCK_LIST_RESPONSE = {'rows': [{'id': 123, 'tracking_number': 'ABC123', 'status': 'shipped'}, {'id': 456, 'tracking_number': 'DEF456', 'status': 'delivered'}]}
-_LIST_KEY = "rows"
+MOCK_LIST_RESPONSE = {'users': [{'id': 123, 'name': 'John Doe', 'email': 'john.doe@example.com'}, {'id': 456, 'name': 'Jane Doe', 'email': 'jane.doe@example.com'}]}
+_LIST_KEY = "users"
 
 # Terminal response: only the records array, no pagination-continuation fields.
 # Prevents the cursor/offset pagination loop from running forever in tests.
 _TERMINAL_LIST_RESPONSE = {_LIST_KEY: MOCK_LIST_RESPONSE.get(_LIST_KEY, [])}
 
 
-def _make_client() -> PostgresqlToSlackConnector:
-    return PostgresqlToSlackConnector(api_token="test-token")
+def _make_client() -> SalesforceToZendeskConnector:
+    return SalesforceToZendeskConnector(api_token="test-token")
 
 
 @resp_lib.activate
-def test_list_records_returns_items():
+def test_list_partners_returns_items():
     resp_lib.add(resp_lib.GET, _LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_client()
-    result = client.list_records()
+    result = client.list_partners()
     assert isinstance(result, list)
     assert result == _TERMINAL_LIST_RESPONSE.get(_LIST_KEY, [])
 
 
 @resp_lib.activate
-def test_create_record_sends_payload():
-    payload = {"name": "test-record"}
+def test_create_partner_sends_payload():
+    payload = {"name": "test-partner"}
     created = {"id": "new-id", **payload}
     resp_lib.add(resp_lib.POST, _CREATE_URL, json=created, status=201)
     client = _make_client()
-    result = client.create_record(payload)
+    result = client.create_partner(payload)
     assert result.get("id") == "new-id"
     assert len(resp_lib.calls) == 1
     assert resp_lib.calls[0].request.method == "POST"
@@ -50,7 +50,19 @@ def test_raises_on_server_error():
     resp_lib.add(resp_lib.GET, _LIST_URL, json={"error": "not found"}, status=404)
     client = _make_client()
     with pytest.raises(HTTPError):
-        client.list_records()
+        client.list_partners()
+
+
+@resp_lib.activate
+def test_delete_partner_sends_request():
+    record_id = "test-id"
+    resp_lib.add(
+        resp_lib.DELETE, _LIST_URL.rstrip("/") + "/" + record_id, status=204,
+    )
+    client = _make_client()
+    client.delete_partner(record_id)
+    assert len(resp_lib.calls) == 1
+    assert resp_lib.calls[0].request.method == "DELETE"
 
 
 @resp_lib.activate
@@ -62,7 +74,7 @@ def test_retries_on_429():
     )
     resp_lib.add(resp_lib.GET, _LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_client()
-    result = client.list_records()
+    result = client.list_partners()
     assert isinstance(result, list)
     assert len(resp_lib.calls) == 2, (
         f"Expected 2 calls (1 retry), got {len(resp_lib.calls)} — retry logic may be missing"

@@ -370,6 +370,10 @@ export default function HomePage() {
   const runGapAnalysis = async () => {
     if (l1State.phase !== "done" || !useCaseText.trim()) return
     setL2State({ phase: "processing", logs: [] })
+    // A new gap analysis invalidates any previously generated Level 3 bundles —
+    // reset so stale cards from a prior dataset are never shown alongside new results.
+    setL3State({ phase: "idle" })
+    setExpandedBundle(null)
 
     try {
       const res = await fetch("/api/analyze", {
@@ -604,6 +608,8 @@ export default function HomePage() {
               onClick={() => {
                 setL1State({ phase: "idle" })
                 setL2State({ phase: "idle" })
+                setL3State({ phase: "idle" })
+                setExpandedBundle(null)
                 setFiles([])
                 setUseCaseText("")
               }}

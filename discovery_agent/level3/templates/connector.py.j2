@@ -7,6 +7,7 @@ Auth: {{ auth_type }}
 """
 from __future__ import annotations
 
+import os
 import time
 import logging
 from typing import Any, Dict, List
@@ -16,7 +17,14 @@ from requests import Response, Session
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "{{ api_base_url }}"
+# BASE_URL reads from an environment variable so tenant-specific URLs (Okta, Zendesk,
+# Salesforce, etc.) can be configured without touching this file.
+# Set {{ destination_system | upper | replace(' ', '_') | replace('-', '_') }}_BASE_URL
+# in your environment to override the default below.
+BASE_URL = os.environ.get(
+    "{{ destination_system | upper | replace(' ', '_') | replace('-', '_') }}_BASE_URL",
+    "{{ api_base_url }}",
+)
 LIST_ENDPOINT = "{{ list_endpoint }}"
 CREATE_ENDPOINT = "{{ create_endpoint }}"
 RETRY_STATUSES = {{ retry_status_codes | to_python_repr }}
@@ -94,6 +102,21 @@ class {{ class_name }}:
             if len(batch) < per_page:
                 break
             page += 1
+{% elif pagination_style == "link_header" %}
+        # Link-header pagination (RFC 5988): next page URL is in the Link response header.
+        # Used by Okta, GitHub, GitLab, and others. The next URL is absolute so it is
+        # followed directly via the session (which carries auth headers).
+        resp = self._request("GET", LIST_ENDPOINT, params=params)
+        while True:
+            data = resp.json()
+            # Some APIs return a bare array; others wrap records under a key.
+            batch = data if isinstance(data, list) else data.get("{{ list_response_key }}", [])
+            records.extend(batch)
+            next_url = resp.links.get("next", {}).get("url")
+            if not next_url:
+                break
+            resp = self.session.request("GET", next_url, timeout=DEFAULT_TIMEOUT)
+            resp.raise_for_status()
 {% else %}
         data = self._request("GET", LIST_ENDPOINT, params=params).json()
         records = data.get("{{ list_response_key }}", [])
@@ -111,3 +134,7 @@ class {{ class_name }}:
     def update_{{ entity_name }}(self, record_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Update an existing {{ entity_name }} by ID."""
         return self._request("PATCH", LIST_ENDPOINT + "/" + record_id, json=payload).json()
+
+    def delete_{{ entity_name }}(self, record_id: str) -> None:
+        """Delete a {{ entity_name }} by ID."""
+        self._request("DELETE", LIST_ENDPOINT + "/" + record_id)
