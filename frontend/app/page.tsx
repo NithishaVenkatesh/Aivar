@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
+import { createZip, downloadZip } from "../lib/zip"
 
 // ---------------------------------------------------------------------------
 // Level 1 types
@@ -86,6 +87,38 @@ type L2State =
   | { phase: "idle" }
   | { phase: "processing"; logs: string[] }
   | { phase: "done"; report: GapReport; logs: string[] }
+  | { phase: "error"; message: string; logs: string[] }
+
+// ---------------------------------------------------------------------------
+// Level 3 types
+// ---------------------------------------------------------------------------
+
+interface ValidationReport {
+  connector_compiles: boolean
+  connector_imports: boolean
+  agent_def_valid: boolean
+  tests_pass: boolean
+  failures: string[]
+  valid: boolean
+}
+
+interface GeneratedBundle {
+  gap_key: string
+  source_system: string
+  destination_system: string
+  connector_code: string
+  agent_def_yaml: string
+  test_code: string
+  readme: string
+  requirements: string
+  validation: ValidationReport
+  artifacts_dir: string | null
+}
+
+type L3State =
+  | { phase: "idle" }
+  | { phase: "processing"; logs: string[] }
+  | { phase: "done"; bundles: GeneratedBundle[]; logs: string[] }
   | { phase: "error"; message: string; logs: string[] }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +221,37 @@ function LogPanel({ logs, active, label }: { logs: string[]; active: boolean; la
 }
 
 // ---------------------------------------------------------------------------
+// Bundle download helpers
+// ---------------------------------------------------------------------------
+
+function bundleSlug(b: GeneratedBundle): string {
+  return `${b.source_system}_to_${b.destination_system}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function bundleFiles(b: GeneratedBundle): { name: string; content: string }[] {
+  const slug = bundleSlug(b)
+  return [
+    { name: `${slug}/connector.py`,      content: b.connector_code },
+    { name: `${slug}/agent_def.yaml`,    content: b.agent_def_yaml },
+    { name: `${slug}/test_connector.py`, content: b.test_code },
+    { name: `${slug}/requirements.txt`,  content: b.requirements },
+    { name: `${slug}/README.md`,         content: b.readme },
+  ]
+}
+
+function downloadBundle(b: GeneratedBundle): void {
+  downloadZip(createZip(bundleFiles(b)), `${bundleSlug(b)}.zip`)
+}
+
+function downloadAllBundles(bundles: GeneratedBundle[]): void {
+  const files = bundles.flatMap(bundleFiles)
+  downloadZip(createZip(files), "connectors.zip")
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -201,6 +265,11 @@ export default function HomePage() {
   const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
   const [useCaseText, setUseCaseText] = useState("")
   const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
+
+  // Level 3 state
+  const [l3State, setL3State] = useState<L3State>({ phase: "idle" })
+  const [expandedBundle, setExpandedBundle] = useState<number | null>(null)
+  const [bundleFileTab, setBundleFileTab] = useState<"connector" | "agent_def" | "tests" | "requirements" | "readme">("connector")
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => {
@@ -362,6 +431,77 @@ export default function HomePage() {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Level 3 — connector generation
+  // -------------------------------------------------------------------------
+  const runGenerate = async () => {
+    if (l1State.phase !== "done" || l2State.phase !== "done") return
+    setL3State({ phase: "processing", logs: [] })
+    setExpandedBundle(null)
+
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventory: l1State.result,
+          gap_report: l2State.report,
+        }),
+      })
+
+      if (!res.ok || !res.body) {
+        const data = await res.json()
+        setL3State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          let event: { type: string; message?: string; data?: { bundles: GeneratedBundle[] } }
+          try { event = JSON.parse(line.slice(6)) } catch { continue }
+
+          if (event.type === "log" && event.message) {
+            setL3State((prev) =>
+              prev.phase === "processing"
+                ? { ...prev, logs: [...prev.logs, event.message!] }
+                : prev
+            )
+          } else if (event.type === "result" && event.data) {
+            setL3State((prev) => ({
+              phase: "done",
+              bundles: event.data!.bundles,
+              logs: prev.phase === "processing" ? prev.logs : [],
+            }))
+          } else if (event.type === "error" && event.message) {
+            setL3State((prev) => ({
+              phase: "error",
+              message: event.message!,
+              logs: prev.phase === "processing" ? prev.logs : [],
+            }))
+          }
+        }
+      }
+    } catch (err: unknown) {
+      setL3State((prev) => ({
+        phase: "error",
+        message: err instanceof Error ? err.message : "Unknown error",
+        logs: prev.phase === "processing" ? prev.logs : [],
+      }))
+    }
+  }
+
   const l1Logs =
     l1State.phase === "processing" || l1State.phase === "done" || l1State.phase === "error"
       ? l1State.logs : []
@@ -371,6 +511,11 @@ export default function HomePage() {
     l2State.phase === "processing" || l2State.phase === "done" || l2State.phase === "error"
       ? l2State.logs : []
   const l2Report = l2State.phase === "done" ? l2State.report : null
+
+  const l3Logs =
+    l3State.phase === "processing" || l3State.phase === "done" || l3State.phase === "error"
+      ? l3State.logs : []
+  const l3Bundles = l3State.phase === "done" ? l3State.bundles : null
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -890,6 +1035,192 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* ---------------------------------------------------------------- */}
+            {/* LEVEL 3 — Connector Generation (when missing integrations exist)  */}
+            {/* ---------------------------------------------------------------- */}
+            {l2Report && l2Report.missing_integrations > 0 && (
+              <>
+                {/* Divider */}
+                <div className="flex items-center gap-4 pt-2">
+                  <div className="flex-1 h-px bg-slate-200" />
+                  <span className="text-xs text-slate-400 font-medium uppercase tracking-wider whitespace-nowrap">
+                    Level 3 — Connector Generation
+                  </span>
+                  <div className="flex-1 h-px bg-slate-200" />
+                </div>
+
+                {/* Generate button */}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                  <p className="text-sm text-slate-600">
+                    Generate connector modules, agent definitions, and unit tests for each missing integration.
+                    Each bundle is validated automatically — syntax check, YAML structure, and live test run.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={runGenerate}
+                      disabled={l3State.phase === "processing"}
+                      className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
+                        disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {l3State.phase === "processing" ? "Generating…" : "Generate Connectors"}
+                    </button>
+                    {(l3State.phase === "done" || l3State.phase === "error") && (
+                      <button
+                        onClick={() => { setL3State({ phase: "idle" }); setExpandedBundle(null) }}
+                        className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* L3 log panel */}
+                <LogPanel logs={l3Logs} active={l3State.phase === "processing"} label="Generation logs" />
+
+                {/* L3 error */}
+                {l3State.phase === "error" && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                    <strong>Error:</strong> {l3State.message}
+                  </div>
+                )}
+
+                {/* L3 bundles */}
+                {l3Bundles && l3Bundles.length > 0 && (
+                  <div className="space-y-4">
+                    {/* Summary + Download All */}
+                    <div className="flex flex-wrap items-start gap-4">
+                      <div className="grid grid-cols-3 gap-4 flex-1">
+                        {[
+                          { label: "Bundles Generated", value: l3Bundles.length },
+                          { label: "Passed Validation", value: l3Bundles.filter(b => b.validation.valid).length },
+                          { label: "Failed Validation", value: l3Bundles.filter(b => !b.validation.valid).length },
+                        ].map(({ label, value }) => (
+                          <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
+                            <p className="text-2xl font-bold text-slate-900">{value}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => downloadAllBundles(l3Bundles)}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download All (.zip)
+                      </button>
+                    </div>
+
+                    {/* Bundle cards */}
+                    {l3Bundles.map((bundle, i) => (
+                      <div key={i} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                          <div className="font-medium text-slate-900">{bundle.gap_key}</div>
+                          <div className="flex items-center gap-2">
+                            {bundle.validation.valid
+                              ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
+                              : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
+                            }
+                            <button
+                              onClick={() => downloadBundle(bundle)}
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                              </svg>
+                              .zip
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Validation checks */}
+                        <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
+                          {[
+                            { label: "Compiles", ok: bundle.validation.connector_compiles },
+                            { label: "Imports", ok: bundle.validation.connector_imports },
+                            { label: "YAML valid", ok: bundle.validation.agent_def_valid },
+                            { label: "Tests pass", ok: bundle.validation.tests_pass },
+                          ].map(({ label, ok }) => (
+                            <div key={label} className="flex items-center gap-1.5 text-xs">
+                              <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
+                                {ok ? "✓" : "✗"}
+                              </span>
+                              <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Failure details */}
+                        {bundle.validation.failures.length > 0 && (
+                          <div className="px-4 py-3 bg-red-50 border-b border-slate-100">
+                            <p className="text-xs font-medium text-red-700 mb-1.5">Failure details:</p>
+                            <ul className="space-y-1">
+                              {bundle.validation.failures.map((f, j) => (
+                                <li key={j} className="text-xs text-red-600 font-mono whitespace-pre-wrap break-all">{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* File viewer toggle */}
+                        <button
+                          onClick={() => {
+                            setExpandedBundle(expandedBundle === i ? null : i)
+                            setBundleFileTab("connector")
+                          }}
+                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                        >
+                          <span className="font-medium">View generated files</span>
+                          <svg
+                            className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+
+                        {/* File viewer */}
+                        {expandedBundle === i && (
+                          <div className="border-t border-slate-100">
+                            <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
+                              {([
+                                { key: "connector",    label: "connector.py" },
+                                { key: "agent_def",    label: "agent_def.yaml" },
+                                { key: "tests",        label: "test_connector.py" },
+                                { key: "requirements", label: "requirements.txt" },
+                                { key: "readme",       label: "README.md" },
+                              ] as const).map(({ key, label }) => (
+                                <button
+                                  key={key}
+                                  onClick={() => setBundleFileTab(key)}
+                                  className={`px-3 py-1 rounded text-xs font-mono transition-colors
+                                    ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
+                              {bundleFileTab === "connector"    ? bundle.connector_code
+                                : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
+                                : bundleFileTab === "tests"        ? bundle.test_code
+                                : bundleFileTab === "requirements" ? bundle.requirements
+                                : bundle.readme}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

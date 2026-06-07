@@ -19,6 +19,7 @@ python-dotenv = "*"
 rich = "*"
 rapidfuzz = "*"
 Pillow = "*"
+jinja2 = "*"
 
 [tool.poetry.scripts]
 discover = "discovery_agent.cli:main"
