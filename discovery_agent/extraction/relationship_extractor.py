@@ -22,8 +22,8 @@ For each relationship provide:
 - source: the system that sends data or triggers the action
   (must be exactly from the confirmed list above)
 - target: the system that receives (must be exactly from the confirmed list above)
-- relation: one of syncs_to / feeds_data_to / authenticates_via /
-  depends_on / triggers / pushes_to / pulls_from / integrates_with
+- relation: one of syncs_to / feeds_data_to / depends_on / triggers /
+  pushes_to / pulls_from / integrates_with
 - direction: unidirectional or bidirectional
 - trigger: when it happens (nightly / real-time / on-event / manual) —
   null if not stated
@@ -68,6 +68,7 @@ def _extract_from_chunk(
             model=TEXT_MODEL,
             response_model=RawRelationshipList,
             max_retries=1,
+            temperature=0,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Document text:\n\n{text}"},
@@ -99,8 +100,13 @@ def _validate(
             )
             continue
 
-        # Guard 2: evidence must be a substring of the source chunk
-        if rel.evidence not in chunk.text:
+        # Guard 2: evidence must appear in the source chunk.
+        # Normalized check (lowercase + collapsed whitespace) so minor LLM
+        # formatting differences don't silently drop real edges.
+        def _norm(t: str) -> str:
+            return " ".join(t.lower().split())
+
+        if _norm(rel.evidence) not in _norm(chunk.text):
             logger.warning(
                 f"Rejected edge {rel.source!r} → {rel.target!r}: "
                 "evidence not found in source text"
