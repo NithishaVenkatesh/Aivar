@@ -32,7 +32,7 @@ from connector import (
 _SRC_LIST_URL = SRC_BASE_URL.rstrip("/") + "/" + SRC_LIST_ENDPOINT.lstrip("/")
 _DST_CREATE_URL = DST_BASE_URL.rstrip("/") + "/" + DST_CREATE_ENDPOINT.lstrip("/")
 
-MOCK_LIST_RESPONSE = {'records': [{'Id': '1234567890', 'Name': 'ABC Partner'}, {'Id': '9876543210', 'Name': 'XYZ Partner'}]}
+MOCK_LIST_RESPONSE = {'records': [{'Id': '001d300000000abc', 'Name': 'John Doe', 'Email': 'john.doe@example.com'}, {'Id': '001d300000000def', 'Name': 'Jane Doe', 'Email': 'jane.doe@example.com'}]}
 _LIST_KEY = "records"
 _MOCK_RECORDS = MOCK_LIST_RESPONSE.get(_LIST_KEY, [])
 # Non-empty key: connector reads records via data.get("records", [])

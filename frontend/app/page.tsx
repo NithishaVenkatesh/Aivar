@@ -144,9 +144,9 @@ const EFFORT_COLORS: Record<string, string> = {
 }
 
 const EFFORT_LABELS: Record<string, string> = {
-  S: "1–3 days",
-  M: "1–2 weeks",
-  L: "3–6 weeks",
+  S: "1-3 days",
+  M: "1-2 weeks",
+  L: "3-6 weeks",
   XL: "2+ months",
 }
 
@@ -224,6 +224,81 @@ function LogPanel({ logs, active, label }: { logs: string[]; active: boolean; la
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline progress indicator
+// ---------------------------------------------------------------------------
+
+type StageStatus = "idle" | "processing" | "done" | "error" | "skipped"
+
+function PipelineProgress({
+  stages,
+}: {
+  stages: Array<{ label: string; status: StageStatus; detail?: string }>
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 px-5 py-4">
+      <div className="flex items-start gap-0">
+        {stages.map((stage, i) => {
+          const { status } = stage
+          const isDone = status === "done"
+          const isActive = status === "processing"
+          const isError = status === "error"
+          const isSkipped = status === "skipped"
+
+          return (
+            <div key={i} className="flex items-start flex-1 min-w-0">
+              <div className="flex flex-col items-center gap-1.5 flex-1 min-w-0">
+                {/* Step bubble */}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all
+                  ${isDone   ? "bg-green-500 text-white"
+                  : isActive ? "bg-brand-600 text-white ring-4 ring-brand-100"
+                  : isError  ? "bg-red-500 text-white"
+                  : isSkipped? "bg-slate-200 text-slate-400"
+                  :            "bg-slate-200 text-slate-400"}`}
+                >
+                  {isDone    ? "✓"
+                  : isError  ? "✗"
+                  : isActive ? <span className="animate-pulse">{i + 1}</span>
+                  :            i + 1}
+                </div>
+                {/* Label */}
+                <div className="text-center px-1 min-w-0">
+                  <p className={`text-xs font-medium leading-tight
+                    ${isDone    ? "text-slate-700"
+                    : isActive  ? "text-brand-700"
+                    : isError   ? "text-red-600"
+                    :             "text-slate-400"}`}
+                  >
+                    {stage.label}
+                  </p>
+                  {stage.detail && (
+                    <p className={`text-xs mt-0.5 leading-tight
+                      ${isDone    ? "text-green-600"
+                      : isActive  ? "text-slate-500"
+                      : isError   ? "text-red-400"
+                      : isSkipped ? "text-slate-400"
+                      :             "text-slate-400"}`}
+                    >
+                      {stage.detail}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {/* Connector line between steps */}
+              {i < stages.length - 1 && (
+                <div className={`h-px w-full mt-4 mx-1 shrink-0 transition-colors
+                  ${isDone ? "bg-green-300" : "bg-slate-200"}`}
+                  style={{ minWidth: "1rem" }}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Bundle download helpers
 // ---------------------------------------------------------------------------
 
@@ -259,18 +334,18 @@ function downloadAllBundles(bundles: GeneratedBundle[]): void {
 // ---------------------------------------------------------------------------
 
 export default function HomePage() {
-  // Level 1 state
+  // Input state
   const [files, setFiles] = useState<File[]>([])
-  const [l1State, setL1State] = useState<L1State>({ phase: "idle" })
-  const [activeTab, setActiveTab] = useState<"systems" | "relationships">("systems")
-
-  // Level 2 state
-  const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
   const [useCaseText, setUseCaseText] = useState("")
-  const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
 
-  // Level 3 state
+  // Pipeline state
+  const [l1State, setL1State] = useState<L1State>({ phase: "idle" })
+  const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
   const [l3State, setL3State] = useState<L3State>({ phase: "idle" })
+
+  // UI state
+  const [activeTab, setActiveTab] = useState<"systems" | "relationships">("systems")
+  const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
   const [expandedBundle, setExpandedBundle] = useState<number | null>(null)
   const [bundleFileTab, setBundleFileTab] = useState<"connector" | "agent_def" | "tests" | "requirements" | "readme">("connector")
 
@@ -299,27 +374,31 @@ export default function HomePage() {
     setFiles((prev) => prev.filter((f) => f.name !== name))
 
   // -------------------------------------------------------------------------
-  // Level 1 — discover systems
+  // Level 1 — returns result directly so runAll can chain without state timing issues
   // -------------------------------------------------------------------------
-  const runDiscovery = async () => {
-    if (!files.length) return
+  const runDiscovery = async (): Promise<DiscoveryResult | null> => {
     setL1State({ phase: "processing", logs: [] })
     setL2State({ phase: "idle" })
+    setL3State({ phase: "idle" })
+    setExpandedBundle(null)
 
     const form = new FormData()
     files.forEach((f) => form.append("files", f))
+
+    let logLines: string[] = []
 
     try {
       const res = await fetch("/api/discover", { method: "POST", body: form })
       if (!res.ok || !res.body) {
         const data = await res.json()
         setL1State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
-        return
+        return null
       }
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let result: DiscoveryResult | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -335,65 +414,53 @@ export default function HomePage() {
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
           if (event.type === "log" && event.message) {
-            setL1State((prev) =>
-              prev.phase === "processing"
-                ? { ...prev, logs: [...prev.logs, event.message!] }
-                : prev
-            )
+            logLines = [...logLines, event.message]
+            setL1State({ phase: "processing", logs: logLines })
           } else if (event.type === "result" && event.data) {
-            setL1State((prev) => ({
-              phase: "done",
-              result: event.data!,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            result = event.data
+            setL1State({ phase: "done", result: event.data, logs: logLines })
           } else if (event.type === "error" && event.message) {
-            setL1State((prev) => ({
-              phase: "error",
-              message: event.message!,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            setL1State({ phase: "error", message: event.message, logs: logLines })
+            return null
           }
         }
       }
+      return result
     } catch (err: unknown) {
-      setL1State((prev) => ({
-        phase: "error",
-        message: err instanceof Error ? err.message : "Unknown error",
-        logs: prev.phase === "processing" ? prev.logs : [],
-      }))
+      const message = err instanceof Error ? err.message : "Unknown error"
+      setL1State({ phase: "error", message, logs: logLines })
+      return null
     }
   }
 
   // -------------------------------------------------------------------------
-  // Level 2 — gap analysis
+  // Level 2 — accepts inventory directly, returns report
   // -------------------------------------------------------------------------
-  const runGapAnalysis = async () => {
-    if (l1State.phase !== "done" || !useCaseText.trim()) return
+  const runGapAnalysis = async (
+    inventory: DiscoveryResult,
+    useCases: string,
+  ): Promise<GapReport | null> => {
     setL2State({ phase: "processing", logs: [] })
-    // A new gap analysis invalidates any previously generated Level 3 bundles —
-    // reset so stale cards from a prior dataset are never shown alongside new results.
-    setL3State({ phase: "idle" })
-    setExpandedBundle(null)
+
+    let logLines: string[] = []
 
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inventory: l1State.result,
-          use_cases: useCaseText,
-        }),
+        body: JSON.stringify({ inventory, use_cases: useCases }),
       })
 
       if (!res.ok || !res.body) {
         const data = await res.json()
         setL2State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
-        return
+        return null
       }
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let report: GapReport | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -409,51 +476,42 @@ export default function HomePage() {
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
           if (event.type === "log" && event.message) {
-            setL2State((prev) =>
-              prev.phase === "processing"
-                ? { ...prev, logs: [...prev.logs, event.message!] }
-                : prev
-            )
+            logLines = [...logLines, event.message]
+            setL2State({ phase: "processing", logs: logLines })
           } else if (event.type === "result" && event.data) {
-            setL2State((prev) => ({
-              phase: "done",
-              report: event.data!,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            report = event.data
+            setL2State({ phase: "done", report: event.data, logs: logLines })
           } else if (event.type === "error" && event.message) {
-            setL2State((prev) => ({
-              phase: "error",
-              message: event.message!,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            setL2State({ phase: "error", message: event.message, logs: logLines })
+            return null
           }
         }
       }
+      return report
     } catch (err: unknown) {
-      setL2State((prev) => ({
-        phase: "error",
-        message: err instanceof Error ? err.message : "Unknown error",
-        logs: prev.phase === "processing" ? prev.logs : [],
-      }))
+      const message = err instanceof Error ? err.message : "Unknown error"
+      setL2State({ phase: "error", message, logs: logLines })
+      return null
     }
   }
 
   // -------------------------------------------------------------------------
-  // Level 3 — connector generation
+  // Level 3 — accepts inventory + report directly
   // -------------------------------------------------------------------------
-  const runGenerate = async () => {
-    if (l1State.phase !== "done" || l2State.phase !== "done") return
+  const runGenerate = async (
+    inventory: DiscoveryResult,
+    gapReport: GapReport,
+  ): Promise<void> => {
     setL3State({ phase: "processing", logs: [] })
     setExpandedBundle(null)
+
+    let logLines: string[] = []
 
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inventory: l1State.result,
-          gap_report: l2State.report,
-        }),
+        body: JSON.stringify({ inventory, gap_report: gapReport }),
       })
 
       if (!res.ok || !res.body) {
@@ -480,49 +538,102 @@ export default function HomePage() {
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
           if (event.type === "log" && event.message) {
-            setL3State((prev) =>
-              prev.phase === "processing"
-                ? { ...prev, logs: [...prev.logs, event.message!] }
-                : prev
-            )
+            logLines = [...logLines, event.message]
+            setL3State({ phase: "processing", logs: logLines })
           } else if (event.type === "result" && event.data) {
-            setL3State((prev) => ({
-              phase: "done",
-              bundles: event.data!.bundles,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            setL3State({ phase: "done", bundles: event.data.bundles, logs: logLines })
           } else if (event.type === "error" && event.message) {
-            setL3State((prev) => ({
-              phase: "error",
-              message: event.message!,
-              logs: prev.phase === "processing" ? prev.logs : [],
-            }))
+            setL3State({ phase: "error", message: event.message, logs: logLines })
+            return
           }
         }
       }
     } catch (err: unknown) {
-      setL3State((prev) => ({
-        phase: "error",
-        message: err instanceof Error ? err.message : "Unknown error",
-        logs: prev.phase === "processing" ? prev.logs : [],
-      }))
+      const message = err instanceof Error ? err.message : "Unknown error"
+      setL3State({ phase: "error", message, logs: logLines })
     }
   }
 
-  const l1Logs =
-    l1State.phase === "processing" || l1State.phase === "done" || l1State.phase === "error"
-      ? l1State.logs : []
+  // -------------------------------------------------------------------------
+  // Autonomous pipeline — chains all three stages with no user clicks between
+  // -------------------------------------------------------------------------
+  const runAll = async () => {
+    if (!files.length || !useCaseText.trim()) return
+
+    const inventory = await runDiscovery()
+    if (!inventory) return
+
+    const report = await runGapAnalysis(inventory, useCaseText)
+    if (!report) return
+
+    if (report.missing_integrations > 0) {
+      await runGenerate(inventory, report)
+    }
+  }
+
+  const reset = () => {
+    setL1State({ phase: "idle" })
+    setL2State({ phase: "idle" })
+    setL3State({ phase: "idle" })
+    setExpandedBundle(null)
+    setFiles([])
+    setUseCaseText("")
+  }
+
+  // Derived values
+  const isRunning =
+    l1State.phase === "processing" ||
+    l2State.phase === "processing" ||
+    l3State.phase === "processing"
+
+  const hasStarted = l1State.phase !== "idle"
+
+  const l1Logs = l1State.phase === "processing" || l1State.phase === "done" || l1State.phase === "error" ? l1State.logs : []
   const l1Result = l1State.phase === "done" ? l1State.result : null
 
-  const l2Logs =
-    l2State.phase === "processing" || l2State.phase === "done" || l2State.phase === "error"
-      ? l2State.logs : []
+  const l2Logs = l2State.phase === "processing" || l2State.phase === "done" || l2State.phase === "error" ? l2State.logs : []
   const l2Report = l2State.phase === "done" ? l2State.report : null
 
-  const l3Logs =
-    l3State.phase === "processing" || l3State.phase === "done" || l3State.phase === "error"
-      ? l3State.logs : []
+  const l3Logs = l3State.phase === "processing" || l3State.phase === "done" || l3State.phase === "error" ? l3State.logs : []
   const l3Bundles = l3State.phase === "done" ? l3State.bundles : null
+
+  // Pipeline progress stages
+  const l3StageStatus = (): StageStatus => {
+    if (l3State.phase !== "idle") return l3State.phase as StageStatus
+    if (l2State.phase === "done" && l2Report && l2Report.missing_integrations === 0) return "skipped"
+    return "idle"
+  }
+
+  const pipelineStages = [
+    {
+      label: "Discover Systems",
+      status: l1State.phase as StageStatus,
+      detail: l1State.phase === "done"
+        ? `${l1Result?.total_systems_found ?? 0} systems found`
+        : l1State.phase === "processing" ? "Analysing documents..."
+        : l1State.phase === "error" ? "Failed"
+        : undefined,
+    },
+    {
+      label: "Analyse Gaps",
+      status: l2State.phase as StageStatus,
+      detail: l2State.phase === "done"
+        ? `${l2Report?.missing_integrations ?? 0} missing integrations`
+        : l2State.phase === "processing" ? "Mapping use cases..."
+        : l2State.phase === "error" ? "Failed"
+        : undefined,
+    },
+    {
+      label: "Generate Connectors",
+      status: l3StageStatus(),
+      detail: l3State.phase === "done"
+        ? `${l3Bundles?.length ?? 0} bundle(s) generated`
+        : l3State.phase === "processing" ? "Building connectors..."
+        : l3State.phase === "error" ? "Failed"
+        : l3StageStatus() === "skipped" ? "No missing integrations"
+        : undefined,
+    },
+  ]
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -540,282 +651,297 @@ export default function HomePage() {
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
 
         {/* ---------------------------------------------------------------- */}
-        {/* LEVEL 1 — System Discovery                                        */}
+        {/* Unified input panel                                               */}
         {/* ---------------------------------------------------------------- */}
-        <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-            Level 1 — System Discovery
-          </h2>
-        </div>
-
-        {/* Upload zone */}
-        <div
-          {...getRootProps()}
-          className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors
-            ${isDragActive
-              ? "border-brand-500 bg-brand-50"
-              : "border-slate-300 bg-white hover:border-brand-400 hover:bg-slate-50"
-            }`}
-        >
-          <input {...getInputProps()} />
-          <div className="flex flex-col items-center gap-2 text-slate-500">
-            <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <p className="font-medium text-slate-700">
-              {isDragActive ? "Drop files here" : "Drop files or click to browse"}
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100">
+            <h2 className="text-sm font-semibold text-slate-700">Configure Analysis</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Upload your architecture documents and describe your automation goals — the agent will discover systems, analyse gaps, and generate connectors automatically.
             </p>
-            <p className="text-sm">PDF, DOCX, PPTX, XLSX, CSV, MD, TXT, PNG, JPG</p>
           </div>
-        </div>
 
-        {/* File list */}
-        {files.length > 0 && (
-          <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
-            {files.map((f) => (
-              <div key={f.name} className="flex items-center px-4 py-3 gap-3">
-                <span className="text-xs font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600 uppercase">
-                  {f.name.split(".").pop()}
-                </span>
-                <span className="flex-1 text-sm text-slate-700 truncate">{f.name}</span>
-                <span className="text-xs text-slate-400">{(f.size / 1024).toFixed(1)} KB</span>
-                <button
-                  onClick={() => removeFile(f.name)}
-                  className="text-slate-400 hover:text-red-500 transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+          <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Left column — file upload */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                Architecture Documents
+              </p>
+              <p className="text-xs text-slate-400">
+                Runbooks, system inventories, architecture diagrams, contracts — anything describing your tech stack.
+              </p>
 
-        {/* Actions */}
-        <div className="flex items-center gap-4">
-          <button
-            onClick={runDiscovery}
-            disabled={!files.length || l1State.phase === "processing"}
-            className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
-              disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {l1State.phase === "processing" ? "Analyzing…" : "Discover Systems"}
-          </button>
-          {(l1State.phase === "done" || l1State.phase === "error") && (
-            <button
-              onClick={() => {
-                setL1State({ phase: "idle" })
-                setL2State({ phase: "idle" })
-                setL3State({ phase: "idle" })
-                setExpandedBundle(null)
-                setFiles([])
-                setUseCaseText("")
-              }}
-              className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
-            >
-              Reset
-            </button>
-          )}
-        </div>
-
-        {/* L1 log panel */}
-        <LogPanel logs={l1Logs} active={l1State.phase === "processing"} label="Discovery logs" />
-
-        {/* L1 error */}
-        {l1State.phase === "error" && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-            <strong>Error:</strong> {l1State.message}
-          </div>
-        )}
-
-        {/* L1 results */}
-        {l1Result && (
-          <div className="space-y-6">
-            {/* Stats */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {[
-                { label: "Documents", value: l1Result.total_documents_processed },
-                { label: "Systems Found", value: l1Result.total_systems_found },
-                { label: "Relationships", value: l1Result.graph_stats.total_edges },
-                { label: "Flagged for Review", value: l1Result.systems_flagged_for_review },
-              ].map(({ label, value }) => (
-                <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
-                  <p className="text-2xl font-bold text-slate-900">{value}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{label}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Download L1 */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  const blob = new Blob([JSON.stringify(l1Result, null, 2)], { type: "application/json" })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement("a")
-                  a.href = url
-                  a.download = "discovery_inventory.json"
-                  a.click()
-                  URL.revokeObjectURL(url)
-                }}
-                className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+              {/* Dropzone */}
+              <div
+                {...getRootProps()}
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors
+                  ${isDragActive
+                    ? "border-brand-500 bg-brand-50"
+                    : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-white"
+                  }
+                  ${isRunning ? "pointer-events-none opacity-60" : ""}`}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Download Inventory JSON
-              </button>
-            </div>
-
-            {/* L1 tabs */}
-            <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
-              {(["systems", "relationships"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize
-                    ${activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-
-            {/* Systems table */}
-            {activeTab === "systems" && (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-left">
-                      <th className="px-4 py-3 font-medium text-slate-600">System</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Category</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Criticality</th>
-                      <th className="px-4 py-3 font-medium text-slate-600 w-40">Confidence</th>
-                      <th className="px-4 py-3 font-medium text-slate-600 text-center">Mentions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {l1Result.systems.map((sys, i) => (
-                      <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50" : "hover:bg-slate-50"}>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-slate-900">{sys.canonical_name}</div>
-                          {sys.needs_human_review && sys.review_note && (
-                            <div className="text-xs text-amber-700 mt-0.5">{sys.review_note}</div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{sys.category}</td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            text={sys.criticality}
-                            color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown}
-                          />
-                        </td>
-                        <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
-                        <td className="px-4 py-3 text-slate-600 text-center">{sys.mention_count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {l1Result.systems.length === 0 && (
-                  <div className="px-4 py-8 text-center text-sm text-slate-400">No systems found</div>
-                )}
+                <input {...getInputProps()} />
+                <div className="flex flex-col items-center gap-2 text-slate-500">
+                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  <p className="text-sm font-medium text-slate-700">
+                    {isDragActive ? "Drop files here" : "Drop files or click to browse"}
+                  </p>
+                  <p className="text-xs text-slate-400">PDF, DOCX, PPTX, XLSX, CSV, MD, TXT, PNG, JPG</p>
+                </div>
               </div>
-            )}
 
-            {/* Relationships table */}
-            {activeTab === "relationships" && (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-left">
-                      <th className="px-4 py-3 font-medium text-slate-600">Source</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Relation</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Target</th>
-                      <th className="px-4 py-3 font-medium text-slate-600 w-32">Confidence</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {l1Result.relationships.map((rel, i) => (
-                      <tr key={i} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-medium text-slate-900">{rel.source}</td>
-                        <td className="px-4 py-3">
-                          <span className="text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full font-mono">
-                            {rel.relation}
-                          </span>
-                          <span className="ml-2 text-xs text-slate-400">{rel.direction}</span>
-                        </td>
-                        <td className="px-4 py-3 font-medium text-slate-900">{rel.target}</td>
-                        <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {l1Result.relationships.length === 0 && (
-                  <div className="px-4 py-8 text-center text-sm text-slate-400">No relationships found</div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ---------------------------------------------------------------- */}
-        {/* LEVEL 2 — Gap Analysis (appears after L1 completes)               */}
-        {/* ---------------------------------------------------------------- */}
-        {l1State.phase === "done" && (
-          <>
-            {/* Divider */}
-            <div className="flex items-center gap-4 pt-2">
-              <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider whitespace-nowrap">
-                Level 2 — Integration Gap Analysis
-              </span>
-              <div className="flex-1 h-px bg-slate-200" />
+              {/* File list */}
+              {files.length > 0 && (
+                <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                  {files.map((f) => (
+                    <div key={f.name} className="flex items-center px-3 py-2 gap-2">
+                      <span className="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 uppercase shrink-0">
+                        {f.name.split(".").pop()}
+                      </span>
+                      <span className="flex-1 text-xs text-slate-700 truncate">{f.name}</span>
+                      <span className="text-xs text-slate-400 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                      <button
+                        onClick={() => removeFile(f.name)}
+                        disabled={isRunning}
+                        className="text-slate-400 hover:text-red-500 transition-colors disabled:opacity-40"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Use case input */}
-            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-              <p className="text-sm text-slate-600">
-                Describe your automation goals below — one per line. The agent will map
-                each to the discovered systems, identify missing integrations, and
-                prioritise the gaps for you.
+            {/* Right column — use cases */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                Automation Goals
+              </p>
+              <p className="text-xs text-slate-400">
+                One goal per line — describe what business outcomes you want to automate across your systems.
               </p>
               <textarea
                 value={useCaseText}
                 onChange={(e) => setUseCaseText(e.target.value)}
-                disabled={l2State.phase === "processing"}
+                disabled={isRunning}
                 placeholder={
                   "Sync new leads from the website to the CRM automatically\n" +
                   "Auto-generate invoices when a deal is marked closed-won\n" +
-                  "Send order confirmation emails via the communication platform"
+                  "Send order confirmation emails via the communication platform\n" +
+                  "Notify the team when a high-priority ticket is created"
                 }
-                rows={5}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800
+                rows={9}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-800
                   placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500
                   disabled:bg-slate-50 disabled:text-slate-400 resize-none font-mono"
               />
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={runGapAnalysis}
-                  disabled={!useCaseText.trim() || l2State.phase === "processing"}
-                  className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
-                    disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {l2State.phase === "processing" ? "Analysing gaps…" : "Analyse Integration Gaps"}
-                </button>
-                {(l2State.phase === "done" || l2State.phase === "error") && (
+            </div>
+          </div>
+
+          {/* Actions footer */}
+          <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-3">
+            <button
+              onClick={runAll}
+              disabled={!files.length || !useCaseText.trim() || isRunning}
+              className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
+                disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            >
+              {isRunning ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Running...
+                </>
+              ) : (
+                "Run Full Analysis"
+              )}
+            </button>
+
+            {hasStarted && !isRunning && (
+              <button
+                onClick={reset}
+                className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                Reset
+              </button>
+            )}
+
+            {!files.length && (
+              <p className="text-xs text-slate-400">Upload at least one document to begin</p>
+            )}
+            {files.length > 0 && !useCaseText.trim() && (
+              <p className="text-xs text-slate-400">Add at least one automation goal to begin</p>
+            )}
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Pipeline progress                                                  */}
+        {/* ---------------------------------------------------------------- */}
+        {hasStarted && <PipelineProgress stages={pipelineStages} />}
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Level 1 results                                                    */}
+        {/* ---------------------------------------------------------------- */}
+        {hasStarted && (
+          <div className="space-y-4">
+            {/* L1 log panel */}
+            <LogPanel logs={l1Logs} active={l1State.phase === "processing"} label="Discovery logs" />
+
+            {/* L1 error */}
+            {l1State.phase === "error" && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                <strong>Error:</strong> {l1State.message}
+              </div>
+            )}
+
+            {/* L1 results */}
+            {l1Result && (
+              <div className="space-y-4">
+                {/* Stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                    { label: "Documents", value: l1Result.total_documents_processed },
+                    { label: "Systems Found", value: l1Result.total_systems_found },
+                    { label: "Relationships", value: l1Result.graph_stats.total_edges },
+                    { label: "Flagged for Review", value: l1Result.systems_flagged_for_review },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
+                      <p className="text-2xl font-bold text-slate-900">{value}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Download L1 */}
+                <div className="flex justify-end">
                   <button
-                    onClick={() => { setL2State({ phase: "idle" }); setUseCaseText("") }}
-                    className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                    onClick={() => {
+                      const blob = new Blob([JSON.stringify(l1Result, null, 2)], { type: "application/json" })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement("a")
+                      a.href = url
+                      a.download = "discovery_inventory.json"
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
                   >
-                    Clear
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download Inventory JSON
                   </button>
+                </div>
+
+                {/* L1 tabs */}
+                <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+                  {(["systems", "relationships"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize
+                        ${activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Systems table */}
+                {activeTab === "systems" && (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                          <th className="px-4 py-3 font-medium text-slate-600">System</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Category</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Criticality</th>
+                          <th className="px-4 py-3 font-medium text-slate-600 w-40">Confidence</th>
+                          <th className="px-4 py-3 font-medium text-slate-600 text-center">Mentions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {l1Result.systems.map((sys, i) => (
+                          <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50" : "hover:bg-slate-50"}>
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-slate-900">{sys.canonical_name}</div>
+                              {sys.needs_human_review && sys.review_note && (
+                                <div className="text-xs text-amber-700 mt-0.5">{sys.review_note}</div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">{sys.category}</td>
+                            <td className="px-4 py-3">
+                              <Badge
+                                text={sys.criticality}
+                                color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown}
+                              />
+                            </td>
+                            <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
+                            <td className="px-4 py-3 text-slate-600 text-center">{sys.mention_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {l1Result.systems.length === 0 && (
+                      <div className="px-4 py-8 text-center text-sm text-slate-400">No systems found</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Relationships table */}
+                {activeTab === "relationships" && (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                          <th className="px-4 py-3 font-medium text-slate-600">Source</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Relation</th>
+                          <th className="px-4 py-3 font-medium text-slate-600">Target</th>
+                          <th className="px-4 py-3 font-medium text-slate-600 w-32">Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {l1Result.relationships.map((rel, i) => (
+                          <tr key={i} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-medium text-slate-900">{rel.source}</td>
+                            <td className="px-4 py-3">
+                              <span className="text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full font-mono">
+                                {rel.relation}
+                              </span>
+                              <span className="ml-2 text-xs text-slate-400">{rel.direction}</span>
+                            </td>
+                            <td className="px-4 py-3 font-medium text-slate-900">{rel.target}</td>
+                            <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {l1Result.relationships.length === 0 && (
+                      <div className="px-4 py-8 text-center text-sm text-slate-400">No relationships found</div>
+                    )}
+                  </div>
                 )}
               </div>
-            </div>
+            )}
+          </div>
+        )}
 
+        {/* ---------------------------------------------------------------- */}
+        {/* Level 2 results                                                    */}
+        {/* ---------------------------------------------------------------- */}
+        {l2State.phase !== "idle" && (
+          <div className="space-y-4">
             {/* L2 log panel */}
             <LogPanel logs={l2Logs} active={l2State.phase === "processing"} label="Gap analysis logs" />
 
@@ -828,7 +954,7 @@ export default function HomePage() {
 
             {/* L2 results */}
             {l2Report && (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* L2 stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
@@ -902,7 +1028,7 @@ export default function HomePage() {
                           <tr key={i} className={gap.status === "missing" ? "bg-red-50/40" : "hover:bg-slate-50"}>
                             <td className="px-4 py-3">
                               <div className="font-medium text-slate-900">
-                                {gap.source_system} → {gap.destination_system}
+                                {gap.source_system} to {gap.destination_system}
                               </div>
                               {gap.entities.length > 0 && (
                                 <div className="text-xs text-slate-500 mt-0.5">
@@ -929,7 +1055,7 @@ export default function HomePage() {
                                   <span className="text-xs text-slate-400">{EFFORT_LABELS[gap.effort]}</span>
                                 </div>
                               ) : (
-                                <span className="text-xs text-slate-400">—</span>
+                                <span className="text-xs text-slate-400">-</span>
                               )}
                             </td>
                             <td className="px-4 py-3 text-center text-slate-600">
@@ -969,7 +1095,7 @@ export default function HomePage() {
                               <ul className="space-y-1">
                                 {dep.required_before.map((uc, j) => (
                                   <li key={j} className="text-sm text-slate-700 flex items-start gap-1.5">
-                                    <span className="text-slate-400 mt-0.5">•</span>
+                                    <span className="text-slate-400 mt-0.5">-</span>
                                     {uc}
                                   </li>
                                 ))}
@@ -1021,7 +1147,7 @@ export default function HomePage() {
                     {l2Report.skipped.missing_capabilities.length > 0 && (
                       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                         <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                          <p className="text-sm font-medium text-slate-700">Missing capabilities (needed but not in inventory)</p>
+                          <p className="text-sm font-medium text-slate-700">Missing capabilities</p>
                         </div>
                         <div className="divide-y divide-slate-100">
                           {l2Report.skipped.missing_capabilities.map((item, i) => (
@@ -1045,217 +1171,182 @@ export default function HomePage() {
                 )}
               </div>
             )}
+          </div>
+        )}
 
-            {/* ---------------------------------------------------------------- */}
-            {/* LEVEL 3 — Connector Generation (when missing integrations exist)  */}
-            {/* ---------------------------------------------------------------- */}
-            {l2Report && l2Report.missing_integrations > 0 && (
-              <>
-                {/* Divider */}
-                <div className="flex items-center gap-4 pt-2">
-                  <div className="flex-1 h-px bg-slate-200" />
-                  <span className="text-xs text-slate-400 font-medium uppercase tracking-wider whitespace-nowrap">
-                    Level 3 — Connector Generation
-                  </span>
-                  <div className="flex-1 h-px bg-slate-200" />
-                </div>
+        {/* ---------------------------------------------------------------- */}
+        {/* Level 3 results                                                    */}
+        {/* ---------------------------------------------------------------- */}
+        {l3State.phase !== "idle" && (
+          <div className="space-y-4">
+            {/* L3 log panel */}
+            <LogPanel logs={l3Logs} active={l3State.phase === "processing"} label="Generation logs" />
 
-                {/* Generate button */}
-                <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-                  <p className="text-sm text-slate-600">
-                    Generate connector modules, agent definitions, and unit tests for each missing integration.
-                    Each bundle is validated automatically — syntax check, YAML structure, and live test run.
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={runGenerate}
-                      disabled={l3State.phase === "processing"}
-                      className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
-                        disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {l3State.phase === "processing" ? "Generating…" : "Generate Connectors"}
-                    </button>
-                    {(l3State.phase === "done" || l3State.phase === "error") && (
-                      <button
-                        onClick={() => { setL3State({ phase: "idle" }); setExpandedBundle(null) }}
-                        className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
+            {/* L3 error */}
+            {l3State.phase === "error" && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                <strong>Error:</strong> {l3State.message}
+              </div>
+            )}
 
-                {/* L3 log panel */}
-                <LogPanel logs={l3Logs} active={l3State.phase === "processing"} label="Generation logs" />
-
-                {/* L3 error */}
-                {l3State.phase === "error" && (
-                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-                    <strong>Error:</strong> {l3State.message}
-                  </div>
-                )}
-
-                {/* L3 bundles */}
-                {l3Bundles && l3Bundles.length > 0 && (
-                  <div className="space-y-4">
-                    {/* Summary + Download All */}
-                    <div className="flex flex-wrap items-start gap-4">
-                      <div className="grid grid-cols-4 gap-4 flex-1">
-                        {[
-                          { label: "Bundles", value: l3Bundles.length, color: "text-slate-900" },
-                          { label: "Passed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700" },
-                          { label: "Failed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700" },
-                          { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700" },
-                        ].map(({ label, value, color }) => (
-                          <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
-                            <p className={`text-2xl font-bold ${color}`}>{value}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">{label}</p>
-                          </div>
-                        ))}
-                      </div>
-                      {l3Bundles.some(b => !b.manual_setup_required) && (
-                        <button
-                          onClick={() => downloadAllBundles(l3Bundles.filter(b => !b.manual_setup_required))}
-                          className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                          </svg>
-                          Download All (.zip)
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Bundle cards */}
-                    {l3Bundles.map((bundle, i) => (
-                      <div key={i} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-                          <div className="font-medium text-slate-900">{bundle.gap_key}</div>
-                          <div className="flex items-center gap-2">
-                            {bundle.manual_setup_required
-                              ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">MANUAL SETUP</span>
-                              : bundle.validation.valid
-                                ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
-                                : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
-                            }
-                            {!bundle.manual_setup_required && (
-                              <button
-                                onClick={() => downloadBundle(bundle)}
-                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                </svg>
-                                .zip
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Paradigm note — shown instead of validation checks for manual bundles */}
-                        {bundle.manual_setup_required && bundle.paradigm_notes && (
-                          <div className="px-4 py-3 bg-amber-50 border-b border-slate-100">
-                            <p className="text-xs font-semibold text-amber-800 mb-1">
-                              Why auto-generation was skipped ({bundle.paradigm.replace('_', ' ')}):
-                            </p>
-                            <p className="text-xs text-amber-700 leading-relaxed whitespace-pre-wrap">
-                              {bundle.paradigm_notes}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Validation checks — only shown for REST connectors */}
-                        {!bundle.manual_setup_required && (
-                          <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
-                            {[
-                              { label: "Compiles", ok: bundle.validation.connector_compiles },
-                              { label: "Imports", ok: bundle.validation.connector_imports },
-                              { label: "YAML valid", ok: bundle.validation.agent_def_valid },
-                              { label: "Tests pass", ok: bundle.validation.tests_pass },
-                            ].map(({ label, ok }) => (
-                              <div key={label} className="flex items-center gap-1.5 text-xs">
-                                <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
-                                  {ok ? "✓" : "✗"}
-                                </span>
-                                <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Failure details */}
-                        {!bundle.manual_setup_required && bundle.validation.failures.length > 0 && (
-                          <div className="px-4 py-3 bg-red-50 border-b border-slate-100">
-                            <p className="text-xs font-medium text-red-700 mb-1.5">Failure details:</p>
-                            <ul className="space-y-1">
-                              {bundle.validation.failures.map((f, j) => (
-                                <li key={j} className="text-xs text-red-600 font-mono whitespace-pre-wrap break-all">{f}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {/* File viewer toggle — only for REST connectors with generated code */}
-                        {!bundle.manual_setup_required && (
-                          <>
-                            <button
-                              onClick={() => {
-                                setExpandedBundle(expandedBundle === i ? null : i)
-                                setBundleFileTab("connector")
-                              }}
-                              className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
-                            >
-                              <span className="font-medium">View generated files</span>
-                              <svg
-                                className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
-                                fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                              </svg>
-                            </button>
-
-                            {expandedBundle === i && (
-                              <div className="border-t border-slate-100">
-                                <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
-                                  {([
-                                    { key: "connector",    label: "connector.py" },
-                                    { key: "agent_def",    label: "agent_def.yaml" },
-                                    { key: "tests",        label: "test_connector.py" },
-                                    { key: "requirements", label: "requirements.txt" },
-                                    { key: "readme",       label: "README.md" },
-                                  ] as const).map(({ key, label }) => (
-                                    <button
-                                      key={key}
-                                      onClick={() => setBundleFileTab(key)}
-                                      className={`px-3 py-1 rounded text-xs font-mono transition-colors
-                                        ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                                    >
-                                      {label}
-                                    </button>
-                                  ))}
-                                </div>
-                                <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
-                                  {bundleFileTab === "connector"    ? bundle.connector_code
-                                    : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
-                                    : bundleFileTab === "tests"        ? bundle.test_code
-                                    : bundleFileTab === "requirements" ? bundle.requirements
-                                    : bundle.readme}
-                                </pre>
-                              </div>
-                            )}
-                          </>
-                        )}
+            {/* L3 bundles */}
+            {l3Bundles && l3Bundles.length > 0 && (
+              <div className="space-y-4">
+                {/* Summary + Download All */}
+                <div className="flex flex-wrap items-start gap-4">
+                  <div className="grid grid-cols-4 gap-4 flex-1">
+                    {[
+                      { label: "Bundles", value: l3Bundles.length, color: "text-slate-900" },
+                      { label: "Passed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700" },
+                      { label: "Failed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700" },
+                      { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700" },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
+                        <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{label}</p>
                       </div>
                     ))}
                   </div>
-                )}
-              </>
+                  {l3Bundles.some(b => !b.manual_setup_required) && (
+                    <button
+                      onClick={() => downloadAllBundles(l3Bundles.filter(b => !b.manual_setup_required))}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download All (.zip)
+                    </button>
+                  )}
+                </div>
+
+                {/* Bundle cards */}
+                {l3Bundles.map((bundle, i) => (
+                  <div key={i} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                      <div className="font-medium text-slate-900">{bundle.gap_key}</div>
+                      <div className="flex items-center gap-2">
+                        {bundle.manual_setup_required
+                          ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">MANUAL SETUP</span>
+                          : bundle.validation.valid
+                            ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
+                            : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
+                        }
+                        {!bundle.manual_setup_required && (
+                          <button
+                            onClick={() => downloadBundle(bundle)}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            .zip
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Paradigm note */}
+                    {bundle.manual_setup_required && bundle.paradigm_notes && (
+                      <div className="px-4 py-3 bg-amber-50 border-b border-slate-100">
+                        <p className="text-xs font-semibold text-amber-800 mb-1">
+                          Why auto-generation was skipped ({bundle.paradigm.replace("_", " ")}):
+                        </p>
+                        <p className="text-xs text-amber-700 leading-relaxed whitespace-pre-wrap">
+                          {bundle.paradigm_notes}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Validation checks */}
+                    {!bundle.manual_setup_required && (
+                      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
+                        {[
+                          { label: "Compiles", ok: bundle.validation.connector_compiles },
+                          { label: "Imports", ok: bundle.validation.connector_imports },
+                          { label: "YAML valid", ok: bundle.validation.agent_def_valid },
+                          { label: "Tests pass", ok: bundle.validation.tests_pass },
+                        ].map(({ label, ok }) => (
+                          <div key={label} className="flex items-center gap-1.5 text-xs">
+                            <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
+                              {ok ? "✓" : "✗"}
+                            </span>
+                            <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Failure details */}
+                    {!bundle.manual_setup_required && bundle.validation.failures.length > 0 && (
+                      <div className="px-4 py-3 bg-red-50 border-b border-slate-100">
+                        <p className="text-xs font-medium text-red-700 mb-1.5">Failure details:</p>
+                        <ul className="space-y-1">
+                          {bundle.validation.failures.map((f, j) => (
+                            <li key={j} className="text-xs text-red-600 font-mono whitespace-pre-wrap break-all">{f}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* File viewer */}
+                    {!bundle.manual_setup_required && (
+                      <>
+                        <button
+                          onClick={() => {
+                            setExpandedBundle(expandedBundle === i ? null : i)
+                            setBundleFileTab("connector")
+                          }}
+                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                        >
+                          <span className="font-medium">View generated files</span>
+                          <svg
+                            className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+
+                        {expandedBundle === i && (
+                          <div className="border-t border-slate-100">
+                            <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
+                              {([
+                                { key: "connector",    label: "connector.py" },
+                                { key: "agent_def",    label: "agent_def.yaml" },
+                                { key: "tests",        label: "test_connector.py" },
+                                { key: "requirements", label: "requirements.txt" },
+                                { key: "readme",       label: "README.md" },
+                              ] as const).map(({ key, label }) => (
+                                <button
+                                  key={key}
+                                  onClick={() => setBundleFileTab(key)}
+                                  className={`px-3 py-1 rounded text-xs font-mono transition-colors
+                                    ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
+                              {bundleFileTab === "connector"    ? bundle.connector_code
+                                : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
+                                : bundleFileTab === "tests"        ? bundle.test_code
+                                : bundleFileTab === "requirements" ? bundle.requirements
+                                : bundle.readme}
+                            </pre>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </main>

@@ -4,6 +4,24 @@
 
 ---
 
+### [2026-06-07] Frontend — unified autonomous pipeline redesign
+
+**Before:** Three separate manual stages — user uploads files, then submits use cases, then triggers connector generation with three separate buttons.
+
+**After:** Single input panel (file dropzone left + use-case textarea right), one "Run Full Analysis" button that autonomously chains L1 → L2 → L3 with no clicks between stages.
+
+**Key changes in `frontend/app/page.tsx`:**
+- Moved `useCaseText` textarea into the top-level input card alongside the file dropzone (two-column grid layout on large screens)
+- Refactored `runGapAnalysis(inventory, useCases)` — accepts both params directly instead of reading from state, eliminating the state-timing race where `l1State.result` might not yet be committed when the function executes
+- Refactored `runGenerate(inventory, gapReport)` — same pattern; both args passed explicitly
+- Added `runAll()` that chains the three stages: `runDiscovery()` → `runGapAnalysis(inv, text)` → `runGenerate(inv, report)`, gating each stage on the previous returning non-null
+- Added `PipelineProgress` component: horizontal stepper with three stages (Discover / Analyse / Generate), each showing idle / processing (animated) / done / error / skipped state
+- Handles "no missing integrations" case: L3 stage shows `skipped` status instead of idle, so users understand why connector generation didn't run
+- All result display sections (L1 systems/relationships tables, L2 gaps/dependencies/skipped tabs, L3 bundle cards with file viewer) preserved exactly — no regressions
+- API call payloads unchanged: `/api/analyze` still receives `{ inventory, use_cases }`, `/api/generate` still receives `{ inventory, gap_report }`
+
+---
+
 ### [2026-06-07] Level 3 — AC8 production-readiness fix (Okta connector ~12% wrong lines)
 
 **Problem:** Acceptance criterion AC8 requires <10% of generated connector lines requiring significant changes. Okta connector was 87 lines with ~10–11 lines needing changes (≈12% — above threshold). Six distinct issues:

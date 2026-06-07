@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 # configured at deploy time without touching this file.
 SRC_BASE_URL = os.environ.get(
     "SALESFORCE_BASE_URL",
-    "https://myinstance.my.salesforce.com",
+    "https://myinstance.salesforce.com",
 )
-SRC_LIST_ENDPOINT = "/api/v54.0/query?q=SELECT+Id,+Name+FROM+Partner"
+SRC_LIST_ENDPOINT = "/services/data/v54.0/query/"
 DST_BASE_URL = os.environ.get(
     "ZENDESK_BASE_URL",
     "https://myinstance.zendesk.com",
 )
-DST_CREATE_ENDPOINT = "/api/v2/tickets.json"
+DST_CREATE_ENDPOINT = "/api/v2/users.json"
 RETRY_STATUSES = [429, 503]
 MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
