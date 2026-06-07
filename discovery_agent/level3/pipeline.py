@@ -65,7 +65,7 @@ def run(
         dst_node = node_map.get(gap.destination_system)
         paradigm = classify_gap(gap.source_system, gap.destination_system, src_node, dst_node)
         if paradigm != 'rest_api':
-            notes = get_paradigm_notes(paradigm, gap.source_system, gap.destination_system)
+            notes = get_paradigm_notes(paradigm, gap.source_system, gap.destination_system, src_node, dst_node)
             logger.warning(
                 f"  Paradigm '{paradigm}' detected for {gap_key} — "
                 f"REST auto-generation skipped, marking manual_setup_required"

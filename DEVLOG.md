@@ -88,6 +88,34 @@ D. `discovery_agent/level3/templates/test_connector.py.j2`:
 - Salesforce→Zendesk: rest_api, list_leads/create_lead method names, inferred_fields section in README showing verified values
 ---
 
+### [2026-06-07] Level 3 — Three-bug fix: URL desync, classifier regression, two-sided connector
+
+**Bugs fixed:**
+
+**Fix 1 — Test/connector URL desync (Salesforce→Zendesk 5/5 tests failing with ConnectionError):**
+Root cause: connector read `BASE_URL` from env var at module load time, but test file hardcoded `BASE_URL = "{{ api_base_url }}"` (a raw Jinja2 literal) — the two values never agreed. Mocked URLs built from the test's literal didn't match the runtime URL from env var.
+Fix: `test_connector.py.j2` now sets `os.environ[prefix + "_BASE_URL"]` with a concrete dummy value BEFORE importing the connector module, then imports `SRC_BASE_URL`, `SRC_LIST_ENDPOINT`, `DST_BASE_URL`, `DST_CREATE_ENDPOINT` directly from `connector`. Mock URLs are built from these imported constants — they agree with runtime values by construction.
+Verified: rendered Salesforce→Zendesk connector, ran pytest, 6/6 pass.
+
+**Fix 2 — Classifier regression (Okta as SOURCE generating REST connectors):**
+Root cause: `classify_gap()` only checked the DESTINATION for identity/SCIM signals. Okta as a SOURCE was invisible to the classifier, routing to `rest_api` and generating a fake connector.
+Fix: `classification.py` now checks BOTH source AND destination using extracted predicate functions (`_is_database`, `_is_identity`, `_is_webhook_only`). Each predicate checks `node.category` / `node.auth_method` attributes first, then falls back to frozenset name heuristics. Added `needs_human_review=True` → `scim_or_manual`. Added `src_node, dst_node` args to `get_paradigm_notes()` for dynamic reason strings (no hardcoded per-system sentences).
+Verified: Okta→Zendesk = scim_or_manual, Salesforce→Okta = scim_or_manual, Salesforce→Zendesk still = rest_api.
+
+**Fix 3 — Two-sided connector + config-based auth (no invented headers):**
+Root cause: `ConnectorSpec` had flat auth/URL fields (single model), causing the generator to model only one side (destination) with an invented `X-Zendesk-Token` header that doesn't exist.
+Fixes across five files:
+- `models.py`: New `ApiProfile` model (auth, base URL, endpoints, pagination) for each side. `ConnectorSpec` now has `source: ApiProfile` + `destination: ApiProfile`.
+- `spec_extractor.py`: Two-sided system prompt (SOURCE rules + DESTINATION rules). Fixed Zendesk `_SYSTEM_OVERRIDES` entry: was `auth_header_name: "X-Zendesk-Token"` (LLM invention) → now `auth_type: bearer, auth_header_name: Authorization, auth_header_prefix: "Bearer "`. New `_apply_profile_overrides(profile, system_name)` applies overrides to ONE profile; `_apply_overrides(spec)` calls it for both.
+- `connector.py.j2`: Full rewrite — `SourceClient` (reads source), `DestinationClient` (writes destination), `{{ class_name }}` orchestrator with `sync_{{ entity_name }}s()`. Auth headers/prefixes sourced from `source.*` and `destination.*` template vars (from `api_profiles` config), never guessed. All 5 pagination styles in SourceClient.
+- `renderer.py`: Added `_env_prefix(name)` helper. All render functions add `src_env_prefix`, `dst_env_prefix` to context. `render_readme()` merges `inferred_fields` from both profiles and builds value lookup from both profile dicts.
+- `README.md.j2`: Updated for two-sided auth section (separate Source/Destination blocks), env-var override instructions, updated usage examples showing `{{ class_name }}(src_token=..., dst_token=...)`.
+No hardcoded system names, base URLs, auth headers, or token endpoints anywhere in templates or generator code.
+
+**Files changed:** `models.py`, `classification.py`, `spec_extractor.py`, `renderer.py`, `pipeline.py`, `connector.py.j2`, `test_connector.py.j2`, `README.md.j2`.
+
+---
+
 ### [2026-06-07] Level 3 — Paradigm classification, retry enforcement, gate propagation
 
 **Issues addressed from validator critique:**

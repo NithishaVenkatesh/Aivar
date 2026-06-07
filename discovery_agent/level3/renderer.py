@@ -36,6 +36,11 @@ def _to_class_name(source: str, destination: str) -> str:
     return f"{clean(source)}To{clean(destination)}Connector"
 
 
+def _env_prefix(name: str) -> str:
+    """Derive the env-var prefix for a system name, e.g. 'Zendesk' → 'ZENDESK'."""
+    return re.sub(r"[^A-Z0-9]", "_", name.upper())
+
+
 def render_connector(spec: ConnectorSpec) -> str:
     # Defense-in-depth: spec_extractor already enforces this, but re-check at
     # render time so a misconfigured spec can never silently produce a connector
@@ -52,6 +57,8 @@ def render_connector(spec: ConnectorSpec) -> str:
     tmpl = _ENV.get_template("connector.py.j2")
     ctx = spec.model_dump()
     ctx["class_name"] = _to_class_name(spec.source_system, spec.destination_system)
+    ctx["src_env_prefix"] = _env_prefix(spec.source_system)
+    ctx["dst_env_prefix"] = _env_prefix(spec.destination_system)
     return tmpl.render(**ctx)
 
 
@@ -72,6 +79,8 @@ def render_tests(spec: ConnectorSpec) -> str:
     tmpl = _ENV.get_template("test_connector.py.j2")
     ctx = spec.model_dump()
     ctx["class_name"] = _to_class_name(spec.source_system, spec.destination_system)
+    ctx["src_env_prefix"] = _env_prefix(spec.source_system)
+    ctx["dst_env_prefix"] = _env_prefix(spec.destination_system)
     return tmpl.render(**ctx)
 
 
@@ -84,11 +93,21 @@ def render_readme(spec: ConnectorSpec) -> str:
     tmpl = _ENV.get_template("README.md.j2")
     ctx = spec.model_dump()
     ctx["class_name"] = _to_class_name(spec.source_system, spec.destination_system)
-    # Build a {field: value} lookup for the "Verify before deploying" section.
-    # Only fields that exist in the spec dict are included; unrecognized names
-    # (LLM hallucinated field names) map to "(unknown)".
+    ctx["src_env_prefix"] = _env_prefix(spec.source_system)
+    ctx["dst_env_prefix"] = _env_prefix(spec.destination_system)
+
+    # Merge inferred_fields from both profiles, deduplicated, source first.
+    src_inferred = list(spec.source.inferred_fields or [])
+    dst_inferred = list(spec.destination.inferred_fields or [])
+    src_set = set(src_inferred)
+    all_inferred = src_inferred + [f for f in dst_inferred if f not in src_set]
+    ctx["inferred_fields"] = all_inferred
+
+    # Build value lookup from both profile dicts so README can show inferred values.
+    src_dict = spec.source.model_dump()
+    dst_dict = spec.destination.model_dump()
     ctx["inferred_values"] = {
-        field: str(ctx.get(field, "(unknown)"))
-        for field in (spec.inferred_fields or [])
+        field: str(src_dict.get(field, dst_dict.get(field, "(unknown)")))
+        for field in all_inferred
     }
     return tmpl.render(**ctx)
