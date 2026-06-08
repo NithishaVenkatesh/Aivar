@@ -9,11 +9,10 @@ source documents. Confirm each against the live API documentation before use:
 
 - **`Id`**: `(unknown)`
 - **`Name`**: `(unknown)`
-- **` PartnerDealNumber`**: `(unknown)`
-- **`PartnerDealAmount`**: `(unknown)`
-- **`subject`**: `(unknown)`
-- **`description`**: `(unknown)`
-- **`priority`**: `(unknown)`
+- **`Email`**: `(unknown)`
+- **`id`**: `(unknown)`
+- **`name`**: `(unknown)`
+- **`email`**: `(unknown)`
 
 > These values compile and pass the mocked unit tests, but may need adjustment for
 > your specific instance, tenant URL, or API version.
@@ -67,18 +66,18 @@ connector = SalesforceToZendeskConnector(
     src_token="your-salesforce-token",
     dst_token="your-zendesk-token",
 )
-synced = connector.sync_partner_deals()
-print(f"Synced {synced} partner_deal(s)")
+synced = connector.sync_partners()
+print(f"Synced {synced} partner(s)")
 
 # Direct source access
 source = SourceClient(api_token="your-salesforce-token")
-records = source.list_partner_deals()
-record = source.get_partner_deal("record-id")
+records = source.list_partners()
+record = source.get_partner("record-id")
 
 # Direct destination access
 destination = DestinationClient(api_token="your-zendesk-token")
-new_record = destination.create_partner_deal({"field": "value"})
-destination.update_partner_deal("record-id", {"field": "new-value"})
+new_record = destination.create_partner({"field": "value"})
+destination.update_partner("record-id", {"field": "new-value"})
 ```
 
 ## Running Tests

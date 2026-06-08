@@ -4,6 +4,29 @@
 
 ---
 
+### [2026-06-08] Frontend — chat-style agentic UI redesign
+
+**Before:** Single-page form with stacked result sections that appear below the input panel as the pipeline completes.
+
+**After:** Full chat thread UI. The input panel becomes a persistent bottom bar (attach button + textarea + send); results appear as agent bubbles in a scrollable thread. Continuity across multiple queries — each run appends to the thread rather than replacing it.
+
+**New files:**
+- `frontend/app/types.ts` — all domain types + `ThreadItem` discriminated union (`welcome | user | thinking | error | l1 | l2 | l3`)
+- `frontend/lib/sse.ts` — generic `consumeSSE<R>()` that reads SSE stream, dispatches log events, and returns the result or throws `SSEError`
+- `frontend/lib/download.ts` — download helpers (`bundleSlug`, `bundleFiles`, `downloadBundle`, `downloadAllBundles`, `downloadJson`) extracted from page.tsx
+- `frontend/app/components/shared.tsx` — `Badge`, `ConfidenceBar`, `ErrorCard`, `SystemGraph` + all color maps
+- `frontend/app/components/ThinkingBubble.tsx` — animated thinking card shown while pipeline stage runs
+- `frontend/app/components/L1ResultCard.tsx` — collapsed summary (4 stats) + click-to-expand systems table/network graph
+- `frontend/app/components/L2ResultCard.tsx` — collapsed summary + click-to-expand gaps/build-order/unmatched tabs
+- `frontend/app/components/L3ResultCard.tsx` — collapsed summary + per-bundle expand with file viewer tabs
+- `frontend/app/components/ThreadItemView.tsx` — switch on `ThreadItem.kind`, renders agent/user wrappers
+
+**Changes to `frontend/app/page.tsx`:** Full rewrite — chat layout (`flex flex-col h-screen`), `thread: ThreadItem[]` state, `appendThread`/`replaceThread`/`pushFeed` helpers, `react-dropzone` with `noClick` (open via attach button), auto-growing textarea, SSE pipeline via `consumeSSE`, auto-scroll on `thread.length` change.
+
+**No backend changes.** All API routes and pipeline logic untouched.
+
+---
+
 ### [2026-06-07] Frontend — unified autonomous pipeline redesign
 
 **Before:** Three separate manual stages — user uploads files, then submits use cases, then triggers connector generation with three separate buttons.
