@@ -1,12 +1,35 @@
 from __future__ import annotations
 import os
 import time
+import uuid
 import logging
 from typing import List
 
 from dotenv import load_dotenv
 
+try:
+    from langsmith import traceable as _traceable
+except ImportError:
+    def _traceable(fn=None, **kwargs):  # type: ignore[misc]
+        """No-op shim when langsmith is not installed."""
+        if fn is not None:
+            return fn
+        return lambda f: f
+
 load_dotenv()
+
+# PromptLayer decorator — initialized after load_dotenv so the API key is present.
+def _pl_traceable(name=None, attributes=None):
+    """No-op shim; replaced below if PromptLayer is configured."""
+    return lambda f: f
+
+_pl_api_key = os.getenv("PROMPTLAYER_API_KEY", "")
+if _pl_api_key:
+    try:
+        from promptlayer import PromptLayer as _PromptLayer
+        _pl_traceable = _PromptLayer(api_key=_pl_api_key).traceable  # type: ignore[assignment]
+    except Exception:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +74,30 @@ if not GROQ_API_KEYS:
     )
 
 
+def generate_run_id() -> str:
+    """8-character hex ID for correlating logs across a single pipeline run."""
+    return uuid.uuid4().hex[:8]
+
+
+def init_sentry() -> None:
+    """Initialize Sentry error tracking if SENTRY_DSN is set. Silent no-op otherwise."""
+    dsn = os.getenv("SENTRY_DSN", "").strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=dsn,
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+            environment=os.getenv("APP_ENV", "development"),
+        )
+        logger.info("Sentry initialized.")
+    except ImportError:
+        logger.debug("sentry-sdk not installed — Sentry disabled.")
+    except Exception as exc:
+        logger.warning(f"Sentry init failed (non-fatal): {exc}")
+
+
 def get_instructor_client(key: str):
     """Return an instructor-wrapped Groq client for the given key."""
     import instructor
@@ -87,6 +134,8 @@ def _is_rate_limit(exc: BaseException) -> bool:
     return "429" in msg or "rate_limit_exceeded" in msg
 
 
+@_pl_traceable(name="llm_call_key_rotation")
+@_traceable(name="llm_call_key_rotation")
 def call_with_key_rotation(fn, *args, **kwargs):
     """
     Call fn(client, *args, **kwargs) rotating through all Groq keys on rate limits.
@@ -121,6 +170,8 @@ def call_with_key_rotation(fn, *args, **kwargs):
     return fn(client, *args, **kwargs)
 
 
+@_pl_traceable(name="vision_call_key_rotation")
+@_traceable(name="vision_call_key_rotation")
 def call_vision_with_key_rotation(fn, *args, **kwargs):
     """
     Same as call_with_key_rotation but passes a plain Groq client (for vision calls).

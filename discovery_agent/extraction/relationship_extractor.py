@@ -1,9 +1,18 @@
 from __future__ import annotations
 import logging
+import re
 from typing import List, Set
 
 from ..models import Chunk, RawRelationshipList, SystemNode, SystemRelationship
 from ..config import TEXT_MODEL, call_with_key_rotation
+
+try:
+    from langsmith import traceable as _traceable
+except ImportError:
+    def _traceable(fn=None, **kwargs):  # type: ignore[misc]
+        if fn is not None:
+            return fn
+        return lambda f: f
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +47,23 @@ Rules:
 - Do not invent connections"""
 
 
+def _get_significant_tokens(confirmed_names: Set[str]) -> Set[str]:
+    """Lower-cased words (≥3 chars) from confirmed system names for fast chunk pre-scan."""
+    tokens: Set[str] = set()
+    for name in confirmed_names:
+        for word in re.split(r'\W+', name):
+            if len(word) >= 3:
+                tokens.add(word.lower())
+    return tokens
+
+
+def _chunk_mentions_systems(chunk_text: str, tokens: Set[str]) -> bool:
+    """True if any confirmed system token appears anywhere in the chunk text."""
+    text_lower = chunk_text.lower()
+    return any(tok in text_lower for tok in tokens)
+
+
+@_traceable(name="extract_relationships")
 def extract_relationships(
     chunks: List[Chunk],
     confirmed_nodes: List[SystemNode],
@@ -48,9 +74,18 @@ def extract_relationships(
 
     confirmed_names: Set[str] = {n.canonical_name for n in confirmed_nodes}
     system_prompt = _build_system_prompt(list(confirmed_names))
+    significant_tokens = _get_significant_tokens(confirmed_names)
     all_relationships: List[SystemRelationship] = []
 
     for chunk in chunks:
+        # Pre-filter: skip LLM call if chunk doesn't even mention any system name token.
+        # This prevents wasting API quota on irrelevant chunks (e.g., appendices, boilerplate).
+        if not _chunk_mentions_systems(chunk.text, significant_tokens):
+            logger.debug(
+                f"Skipping chunk {chunk.chunk_id} — no confirmed system tokens found"
+            )
+            continue
+
         rels = _extract_from_chunk(chunk, system_prompt, confirmed_names)
         all_relationships.extend(rels)
 

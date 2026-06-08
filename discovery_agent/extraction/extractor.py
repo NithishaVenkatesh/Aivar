@@ -6,6 +6,14 @@ from typing import List
 from ..models import Chunk, RawExtractionList, SystemMention
 from ..config import TEXT_MODEL, call_with_key_rotation
 
+try:
+    from langsmith import traceable as _traceable
+except ImportError:
+    def _traceable(fn=None, **kwargs):  # type: ignore[misc]
+        if fn is not None:
+            return fn
+        return lambda f: f
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -24,8 +32,8 @@ _NON_SYSTEM_PATTERNS = re.compile(
         project\s+named     |
         project\s+code      |
         legacy\s+system     |
-        deprecated          |
-        decommission        |
+        deprecated\w*       |
+        decommission\w*     |
         no\s+longer\s+use   |
         we\s+used\s+to      |
         shut\s+down         |
@@ -54,6 +62,13 @@ _HEDGE_PATTERNS = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+# Minimum characters for a valid system name.
+# Single-char and two-char names ("IT", "AI") are generic terms, not systems.
+_MIN_NAME_LENGTH = 3
+
+# Sanity cap: more than this many systems per chunk is likely LLM over-extraction.
+_MAX_SYSTEMS_PER_CHUNK = 30
 
 _SYSTEM_PROMPT = """You are an enterprise system discovery agent analyzing company documents.
 
@@ -85,6 +100,7 @@ Rules:
 - Do not invent or hallucinate systems"""
 
 
+@_traceable(name="extract_systems_from_chunk")
 def extract_systems(chunk: Chunk) -> List[SystemMention]:
     """Pass 1 — extract systems from one chunk. Returns validated SystemMentions."""
 
@@ -105,8 +121,19 @@ def extract_systems(chunk: Chunk) -> List[SystemMention]:
         logger.error(f"Extraction failed for chunk {chunk.chunk_id}: {exc}")
         return []
 
+    if len(raw.systems) > _MAX_SYSTEMS_PER_CHUNK:
+        logger.warning(
+            f"Chunk {chunk.chunk_id} returned {len(raw.systems)} systems — "
+            f"unusually high (limit {_MAX_SYSTEMS_PER_CHUNK}), possible over-extraction"
+        )
+
     mentions: List[SystemMention] = []
     for item in raw.systems:
+        # Guard 0: name must be long enough to be a real system identifier
+        if len(item.name.strip()) < _MIN_NAME_LENGTH:
+            logger.debug(f"Skipped trivially short name: {item.name!r}")
+            continue
+
         # Guard 1: evidence must exist in source text (hallucination check)
         if item.evidence not in chunk.text:
             logger.warning(

@@ -20,6 +20,9 @@ rich = "*"
 rapidfuzz = "*"
 Pillow = "*"
 jinja2 = "*"
+langsmith = "*"
+promptlayer = "*"
+sentry-sdk = "*"
 
 [tool.poetry.scripts]
 discover = "discovery_agent.cli:main"

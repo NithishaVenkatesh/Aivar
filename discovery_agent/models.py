@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional, List
+from typing import Dict, Optional, List
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -109,3 +109,9 @@ class InventoryOutput(BaseModel):
     total_documents_processed: int
     total_systems_found: int
     systems_flagged_for_review: int
+    # Diagnostic fields — all optional with defaults for backward compatibility
+    run_id: str = ""
+    stage_timings: Dict[str, float] = Field(default_factory=dict)
+    extraction_errors: int = 0
+    failed_chunk_ids: List[str] = Field(default_factory=list)
+    total_chunks_processed: int = 0

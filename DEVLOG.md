@@ -325,3 +325,103 @@ Full 8-stage pipeline:
 
 ---
 
+
+### [2026-06-08] Observability — LangSmith + PromptLayer integration (Phase 1)
+
+**What was added:**
+
+- **LangSmith** (`langsmith==0.8.9`): Full LLM call tracing for the Bridgent project. All LLM calls through `call_with_key_rotation` and `call_vision_with_key_rotation` are now traced with inputs, outputs, and timing.
+- **PromptLayer** (`promptlayer==1.4.6`): Prompt logging via their `traceable` decorator, stacked with LangSmith on the same rotation functions.
+
+**Files changed (backend only — no frontend/L1/L2/L3 logic touched):**
+
+- `.env`: Added `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT=Bridgent`, `LANGCHAIN_ENDPOINT`, `PROMPTLAYER_API_KEY`
+- `pyproject.toml`: Added `langsmith = "*"` and `promptlayer = "*"` to dependencies
+- `discovery_agent/config.py`:
+  - Added `_traceable` shim (falls back gracefully if langsmith not installed)
+  - Added `_pl_traceable` initialized from `PromptLayer(api_key=...).traceable` after `load_dotenv()`
+  - Stacked `@_pl_traceable` + `@_traceable` on both `call_with_key_rotation` and `call_vision_with_key_rotation`
+  - `get_instructor_client` and `get_raw_groq_client` unchanged — native Groq wrappers not available in these versions
+
+**What traces look like in LangSmith dashboard (smith.langchain.com):**
+- Project: "Bridgent"
+- Each LLM call appears as `llm_call_key_rotation` run with the text chunk as input and the extracted model as output
+- Vision calls appear as `vision_call_key_rotation`
+
+**What traces look like in PromptLayer dashboard:**
+- Each rotation function call logged with name, timing, and IO
+
+**Non-regression guarantees:**
+- `get_instructor_client` and `get_raw_groq_client` code is byte-for-byte identical to pre-change (no wrapper stacking that could affect Instructor or key rotation)
+- Both decorators have no-op fallbacks — if either service is down or key is invalid, the LLM call proceeds normally
+- No changes to extractor.py, relationship_extractor.py, resolver.py, confidence.py, pipeline.py, or any Level 2/3 files
+
+**Future phases (planned):**
+- Phase 2: LangGraph on Level 1 pipeline (pipeline.py only, node logic files untouched)
+- Phase 3: LangGraph on Level 2+3 after Phase 2 confirmed stable
+- Phase 4: DSPy prompt optimization (needs labeled dataset first)
+
+---
+
+### [2026-06-08] Production hardening — Level 1 observability, guards, parallelism, and test suite
+
+**Goal:** Bring Level 1 pipeline to production-grade quality without breaking any existing functionality. Five problem areas targeted: error handling, observability, defensive validation, performance, and test coverage.
+
+**Changes:**
+
+**`discovery_agent/config.py`**
+- Added `generate_run_id()` — 8-char hex correlation ID (uuid4) stamped on every pipeline run; flows through all log lines as `[run_id]` prefix
+- Added `init_sentry()` — initialises Sentry if `SENTRY_DSN` env var is set; silent no-op otherwise. Sample rate via `SENTRY_TRACES_SAMPLE_RATE`, environment via `APP_ENV`
+- `pyproject.toml`: added `sentry-sdk = "*"`
+
+**`discovery_agent/models.py`**
+- Added 5 diagnostic fields to `InventoryOutput` (all have defaults — backward compatible with existing callers):
+  - `run_id: str = ""`
+  - `stage_timings: Dict[str, float]` — seconds per stage
+  - `extraction_errors: int` — count of crashed extraction workers
+  - `failed_chunk_ids: List[str]` — which chunk IDs failed
+  - `total_chunks_processed: int`
+
+**`discovery_agent/pipeline.py`** (rewritten)
+- Each document ingested in its own `try/except` — parse failures skip that document, not the whole run
+- Pass 1 extraction now uses `ThreadPoolExecutor(max_workers=min(4, total_chunks))` — parallel chunk processing
+- Error rate gate: if ≥80% of chunks fail LLM extraction → `logger.error` with connectivity warning
+- All 8 stages timed with `time.perf_counter()`; timings surfaced in `InventoryOutput.stage_timings`
+- `_empty_output()` updated to accept and propagate all diagnostic fields
+- `run()` accepts optional `run_id` parameter (auto-generated if not provided)
+
+**`discovery_agent/extraction/extractor.py`**
+- Added `@_traceable(name="extract_systems_from_chunk")` (LangSmith trace per chunk)
+- Guard 0: skip extracted names shorter than 3 chars (`_MIN_NAME_LENGTH = 3`) — catches "AI", "IT"
+- Guard 1 (hallucination): evidence substring check — unchanged
+- Guard 2 (non-system context): regex check — extended `deprecated\w*`, `decommission\w*` to catch inflected forms
+- Max-per-chunk warning: log if LLM returns >30 systems from one chunk
+
+**`discovery_agent/extraction/relationship_extractor.py`**
+- Added `@_traceable(name="extract_relationships")` (LangSmith trace per relationship pass)
+- Pre-filter: `_get_significant_tokens()` + `_chunk_mentions_systems()` — skip LLM call for chunks that contain no confirmed system name tokens (prevents quota waste on appendices, boilerplate)
+
+**`run_pipeline.py`** (production-grade rewrite)
+- `_validate_paths()` — resolves each path, checks existence, is-a-file, and 50MB per-file size limit
+- Batch size limit: reject if >20 files in one call
+- Lazy imports: validation errors return JSON before any Python package import
+- Guaranteed stdout JSON: all exit paths (validation error, pipeline crash, keyboard interrupt) print `{"error": "..."}` to stdout
+- Sentry integration: `init_sentry()` at startup; uncaught exceptions captured via `sentry_sdk.capture_exception()`
+- Log format unchanged (stderr, `%(levelname)-8s %(name)s — %(message)s`) to preserve frontend logMapper SSE streaming
+
+**Test suite** (`tests/` — new)
+- `tests/__init__.py`, `tests/unit/__init__.py`
+- `tests/helpers.py` — `make_mention()`, `make_node()`, `make_chunk()` builders
+- `tests/unit/test_resolver.py` — PRODUCT_ALIASES, fuzzy grouping, second-pass dedup (11 tests)
+- `tests/unit/test_confidence.py` — tier classification, hedge penalty, review flag, score clamping (9 tests)
+- `tests/unit/test_extractor_guards.py` — non-system patterns, hedge markers, min name length (16 tests)
+- `tests/unit/test_chunker.py` — no-split, split, source preservation, mixed batch (9 tests)
+- **52/52 passing**, no LLM calls in any test
+
+**Non-regressions confirmed:**
+- `call_with_key_rotation` and `call_vision_with_key_rotation` code unchanged (key rotation, 429 retry, 60s backoff)
+- `resolve()`, `score()`, `build_graph()`, `build_output()` logic unchanged
+- `InventoryOutput` fields all have defaults — existing JSON consumers unaffected
+- `run_pipeline.py` stderr log format identical to prior version
+
+---
