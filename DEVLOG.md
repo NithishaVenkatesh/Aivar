@@ -4,6 +4,25 @@
 
 ---
 
+### [2026-06-08] Frontend — ChatGPT-style sidebar + session management
+
+**Changes to `frontend/app/page.tsx`:**
+- Removed the top `<header>` bar entirely — brand name lives in the sidebar now
+- Root layout changed from `flex-col` to `flex-row` (sidebar + main area side-by-side)
+- Added `<aside>` sidebar (`w-60`) with:
+  - "Bridgent" brand name (orange B icon + text) at the top
+  - "New chat" button (creates a fresh welcome thread)
+  - Session history list showing all chats (newest first, active highlighted)
+  - Theme toggle (light/dark) at the very bottom
+- Added `ChatSession` interface (`{ id, title, thread }`); sessions state replaces the single `thread` state
+- `patchThread(updater)` / `appendThread` / `replaceThread` / `pushFeed` all operate on the currently active session via a ref-tracked `activeId`
+- Session titles are auto-derived from the first 6 words of the first user message
+- `startNewChat()` appends a new blank session and switches to it; `switchSession(id)` switches without disrupting a running pipeline
+- All pipeline logic (L1/L2/L3 SSE) unchanged — only threading through `patchThread` instead of direct `setThread`
+- `tsc --noEmit` confirms zero TypeScript errors
+
+---
+
 ### [2026-06-08] Frontend — chat-style agentic UI redesign
 
 **Before:** Single-page form with stacked result sections that appear below the input panel as the pipeline completes.
