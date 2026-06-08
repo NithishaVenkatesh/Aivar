@@ -3,6 +3,7 @@ import { spawn } from "child_process"
 import { writeFile, mkdir, rm } from "fs/promises"
 import path from "path"
 import os from "os"
+import { mapAnalyzeLog } from "@/lib/logMapper"
 
 export async function POST(req: NextRequest) {
   const { inventory, use_cases } = await req.json()
@@ -50,10 +51,21 @@ export async function POST(req: NextRequest) {
         stdout += chunk.toString()
       })
 
+      let stderrBuffer = ""
       proc.stderr.on("data", (chunk: Buffer) => {
-        const lines = chunk.toString().split("\n").filter(Boolean)
+        stderrBuffer += chunk.toString()
+        const lines = stderrBuffer.split("\n")
+        stderrBuffer = lines.pop() ?? ""
         for (const line of lines) {
-          send({ type: "log", message: line })
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          console.error("[analyze]", trimmed)
+          
+          const mapped = mapAnalyzeLog(trimmed)
+          if (mapped) {
+            send({ type: "log", message: `[USER] ${mapped}` })
+          }
+          send({ type: "log", message: `[DEV] ${trimmed}` })
         }
       })
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
 import { createZip, downloadZip } from "../lib/zip"
 
@@ -74,20 +74,20 @@ interface GapReport {
 }
 
 // ---------------------------------------------------------------------------
-// State machines
+// State machines (no log arrays — logs go to terminal via console.error)
 // ---------------------------------------------------------------------------
 
 type L1State =
   | { phase: "idle" }
-  | { phase: "processing"; logs: string[] }
-  | { phase: "done"; result: DiscoveryResult; logs: string[] }
-  | { phase: "error"; message: string; logs: string[] }
+  | { phase: "processing" }
+  | { phase: "done"; result: DiscoveryResult }
+  | { phase: "error"; message: string }
 
 type L2State =
   | { phase: "idle" }
-  | { phase: "processing"; logs: string[] }
-  | { phase: "done"; report: GapReport; logs: string[] }
-  | { phase: "error"; message: string; logs: string[] }
+  | { phase: "processing" }
+  | { phase: "done"; report: GapReport }
+  | { phase: "error"; message: string }
 
 // ---------------------------------------------------------------------------
 // Level 3 types
@@ -120,27 +120,27 @@ interface GeneratedBundle {
 
 type L3State =
   | { phase: "idle" }
-  | { phase: "processing"; logs: string[] }
-  | { phase: "done"; bundles: GeneratedBundle[]; logs: string[] }
-  | { phase: "error"; message: string; logs: string[] }
+  | { phase: "processing" }
+  | { phase: "done"; bundles: GeneratedBundle[] }
+  | { phase: "error"; message: string }
 
 // ---------------------------------------------------------------------------
 // Shared constants
 // ---------------------------------------------------------------------------
 
 const CRITICALITY_COLORS: Record<string, string> = {
-  critical: "bg-red-100 text-red-800",
-  high: "bg-orange-100 text-orange-800",
-  medium: "bg-yellow-100 text-yellow-800",
-  low: "bg-green-100 text-green-800",
-  unknown: "bg-slate-100 text-slate-600",
+  critical: "bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40",
+  high: "bg-orange-100 dark:bg-orange-950/40 text-orange-800 dark:text-orange-300 border border-orange-200/50 dark:border-orange-800/40",
+  medium: "bg-yellow-100 dark:bg-yellow-950/40 text-yellow-800 dark:text-yellow-300 border border-yellow-200/50 dark:border-yellow-800/40",
+  low: "bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40",
+  unknown: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50",
 }
 
 const EFFORT_COLORS: Record<string, string> = {
-  S: "bg-green-100 text-green-800",
-  M: "bg-yellow-100 text-yellow-800",
-  L: "bg-orange-100 text-orange-800",
-  XL: "bg-red-100 text-red-800",
+  S: "bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40",
+  M: "bg-yellow-100 dark:bg-yellow-950/40 text-yellow-800 dark:text-yellow-300 border border-yellow-200/50 dark:border-yellow-800/40",
+  L: "bg-orange-100 dark:bg-orange-950/40 text-orange-800 dark:text-orange-300 border border-orange-200/50 dark:border-orange-800/40",
+  XL: "bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40",
 }
 
 const EFFORT_LABELS: Record<string, string> = {
@@ -151,8 +151,49 @@ const EFFORT_LABELS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  available: "bg-green-100 text-green-800",
-  missing: "bg-red-100 text-red-800",
+  available: "bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40",
+  missing: "bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40",
+}
+
+// ---------------------------------------------------------------------------
+// Cycling status messages shown during processing
+// ---------------------------------------------------------------------------
+
+const L1_MESSAGES = [
+  "Parsing your documents...",
+  "Identifying system names and APIs...",
+  "Building your system inventory...",
+  "Cross-referencing mentions across files...",
+  "Analysing system relationships...",
+  "Calculating confidence scores...",
+]
+
+const L2_MESSAGES = [
+  "Matching goals to discovered systems...",
+  "Identifying missing integrations...",
+  "Scoring integration gaps by priority...",
+  "Mapping dependency order...",
+  "Reviewing unmapped use cases...",
+]
+
+const L3_MESSAGES = [
+  "Generating connector code...",
+  "Writing agent definition YAML...",
+  "Creating test scaffolding...",
+  "Validating generated connectors...",
+  "Packaging connector bundles...",
+]
+
+function useStatusMessage(messages: string[], active: boolean): string {
+  const [index, setIndex] = useState(0)
+
+  useEffect(() => {
+    if (!active) { setIndex(0); return }
+    const id = setInterval(() => setIndex((i) => (i + 1) % messages.length), 2800)
+    return () => clearInterval(id)
+  }, [active, messages.length])
+
+  return messages[index]
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +202,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 function Badge({ text, color }: { text: string; color: string }) {
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider ${color}`}>
       {text}
     </span>
   )
@@ -172,53 +213,45 @@ function ConfidenceBar({ value }: { value: number }) {
   const color = pct >= 80 ? "bg-green-500" : pct >= 60 ? "bg-yellow-500" : "bg-red-500"
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
         <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-slate-500 w-8 text-right">{pct}%</span>
+      <span className="text-xs text-slate-500 dark:text-slate-400 w-8 text-right font-mono">{pct}%</span>
     </div>
   )
 }
 
-function LogPanel({ logs, active, label }: { logs: string[]; active: boolean; label: string }) {
-  const [open, setOpen] = useState(true)
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (open && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: "smooth" })
-    }
-  }, [logs, open])
-
-  if (!logs.length) return null
-
+function ProcessingCard({ message }: { message: string }) {
   return (
-    <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-700">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-2.5 text-left"
-      >
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${active ? "bg-green-400 animate-pulse" : "bg-slate-500"}`} />
-          <span className="text-xs font-mono text-slate-300">
-            {label} — {logs.length} line{logs.length !== 1 ? "s" : ""}
-          </span>
+    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-6 shadow-sm flex items-center gap-4">
+      <div className="relative flex items-center justify-center shrink-0">
+        <span className="absolute inline-flex h-10 w-10 rounded-full bg-brand-500/20 dark:bg-brand-400/15 agentic-pulse" />
+        <div className="relative w-10 h-10 rounded-full bg-gradient-to-tr from-brand-600 to-indigo-600 dark:from-brand-500 dark:to-indigo-500 flex items-center justify-center shadow-sm">
+          <svg className="w-5 h-5 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
         </div>
-        <svg
-          className={`w-4 h-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <div className="px-4 pb-4 max-h-56 overflow-y-auto font-mono text-xs leading-5 space-y-0.5">
-          {logs.map((line, i) => (
-            <div key={i} className="text-slate-300 whitespace-pre-wrap break-all">{line}</div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
-      )}
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 transition-all duration-500">{message}</p>
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">This may take a moment — logs are in the terminal</p>
+      </div>
+    </div>
+  )
+}
+
+function ErrorCard({ message }: { message: string }) {
+  return (
+    <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-xl p-4 flex items-start gap-3">
+      <svg className="w-5 h-5 text-red-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <div>
+        <p className="text-sm font-semibold text-red-700 dark:text-red-300">Something went wrong</p>
+        <p className="text-sm text-red-600 dark:text-red-400 mt-0.5">{message}</p>
+        <p className="text-xs text-red-400 dark:text-red-500 mt-1">Check the terminal for detailed logs</p>
+      </div>
     </div>
   )
 }
@@ -235,7 +268,7 @@ function PipelineProgress({
   stages: Array<{ label: string; status: StageStatus; detail?: string }>
 }) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 px-5 py-4">
+    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800/80 px-5 py-4 shadow-sm">
       <div className="flex items-start gap-0">
         {stages.map((stage, i) => {
           const { status } = stage
@@ -247,46 +280,43 @@ function PipelineProgress({
           return (
             <div key={i} className="flex items-start flex-1 min-w-0">
               <div className="flex flex-col items-center gap-1.5 flex-1 min-w-0">
-                {/* Step bubble */}
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all
                   ${isDone   ? "bg-green-500 text-white"
-                  : isActive ? "bg-brand-600 text-white ring-4 ring-brand-100"
+                  : isActive ? "bg-brand-600 text-white ring-4 ring-brand-100 dark:ring-brand-950"
                   : isError  ? "bg-red-500 text-white"
-                  : isSkipped? "bg-slate-200 text-slate-400"
-                  :            "bg-slate-200 text-slate-400"}`}
+                  : isSkipped? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
+                  :            "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500"}`}
                 >
                   {isDone    ? "✓"
                   : isError  ? "✗"
                   : isActive ? <span className="animate-pulse">{i + 1}</span>
                   :            i + 1}
                 </div>
-                {/* Label */}
                 <div className="text-center px-1 min-w-0">
-                  <p className={`text-xs font-medium leading-tight
-                    ${isDone    ? "text-slate-700"
-                    : isActive  ? "text-brand-700"
-                    : isError   ? "text-red-600"
-                    :             "text-slate-400"}`}
+                  <p className={`text-xs font-semibold leading-tight
+                    ${isDone    ? "text-slate-700 dark:text-slate-300"
+                    : isActive  ? "text-brand-700 dark:text-brand-400"
+                    : isError   ? "text-red-600 dark:text-red-400"
+                    :             "text-slate-400 dark:text-slate-500"}`}
                   >
                     {stage.label}
                   </p>
                   {stage.detail && (
-                    <p className={`text-xs mt-0.5 leading-tight
-                      ${isDone    ? "text-green-600"
-                      : isActive  ? "text-slate-500"
-                      : isError   ? "text-red-400"
-                      : isSkipped ? "text-slate-400"
-                      :             "text-slate-400"}`}
+                    <p className={`text-[10px] mt-0.5 leading-tight font-medium
+                      ${isDone    ? "text-green-600 dark:text-green-400"
+                      : isActive  ? "text-slate-500 dark:text-slate-400"
+                      : isError   ? "text-red-400 dark:text-red-500"
+                      : isSkipped ? "text-slate-450 dark:text-slate-500"
+                      :             "text-slate-400 dark:text-slate-500"}`}
                     >
                       {stage.detail}
                     </p>
                   )}
                 </div>
               </div>
-              {/* Connector line between steps */}
               {i < stages.length - 1 && (
                 <div className={`h-px w-full mt-4 mx-1 shrink-0 transition-colors
-                  ${isDone ? "bg-green-300" : "bg-slate-200"}`}
+                  ${isDone ? "bg-green-300 dark:bg-green-900" : "bg-slate-200 dark:bg-slate-800"}`}
                   style={{ minWidth: "1rem" }}
                 />
               )}
@@ -334,20 +364,43 @@ function downloadAllBundles(bundles: GeneratedBundle[]): void {
 // ---------------------------------------------------------------------------
 
 export default function HomePage() {
-  // Input state
+  const [theme, setTheme] = useState<"light" | "dark" | null>(null)
+
   const [files, setFiles] = useState<File[]>([])
   const [useCaseText, setUseCaseText] = useState("")
 
-  // Pipeline state
   const [l1State, setL1State] = useState<L1State>({ phase: "idle" })
   const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
   const [l3State, setL3State] = useState<L3State>({ phase: "idle" })
 
-  // UI state
   const [activeTab, setActiveTab] = useState<"systems" | "relationships">("systems")
   const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
   const [expandedBundle, setExpandedBundle] = useState<number | null>(null)
   const [bundleFileTab, setBundleFileTab] = useState<"connector" | "agent_def" | "tests" | "requirements" | "readme">("connector")
+
+  const l1Msg = useStatusMessage(L1_MESSAGES, l1State.phase === "processing")
+  const l2Msg = useStatusMessage(L2_MESSAGES, l2State.phase === "processing")
+  const l3Msg = useStatusMessage(L3_MESSAGES, l3State.phase === "processing")
+
+  useEffect(() => {
+    const saved = localStorage.getItem("aivar-theme") as "light" | "dark" | null
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
+    setTheme(saved || (prefersDark ? "dark" : "light"))
+  }, [])
+
+  const toggleTheme = () => {
+    if (!theme) return
+    const next = theme === "light" ? "dark" : "light"
+    setTheme(next)
+    localStorage.setItem("aivar-theme", next)
+    document.documentElement.classList.add("transitioning")
+    if (next === "dark") {
+      document.documentElement.classList.add("dark")
+    } else {
+      document.documentElement.classList.remove("dark")
+    }
+    setTimeout(() => document.documentElement.classList.remove("transitioning"), 200)
+  }
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => {
@@ -374,10 +427,10 @@ export default function HomePage() {
     setFiles((prev) => prev.filter((f) => f.name !== name))
 
   // -------------------------------------------------------------------------
-  // Level 1 — returns result directly so runAll can chain without state timing issues
+  // Level 1
   // -------------------------------------------------------------------------
   const runDiscovery = async (): Promise<DiscoveryResult | null> => {
-    setL1State({ phase: "processing", logs: [] })
+    setL1State({ phase: "processing" })
     setL2State({ phase: "idle" })
     setL3State({ phase: "idle" })
     setExpandedBundle(null)
@@ -385,13 +438,11 @@ export default function HomePage() {
     const form = new FormData()
     files.forEach((f) => form.append("files", f))
 
-    let logLines: string[] = []
-
     try {
       const res = await fetch("/api/discover", { method: "POST", body: form })
       if (!res.ok || !res.body) {
         const data = await res.json()
-        setL1State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        setL1State({ phase: "error", message: data.error ?? "Request failed" })
         return null
       }
 
@@ -413,36 +464,32 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: DiscoveryResult }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log" && event.message) {
-            logLines = [...logLines, event.message]
-            setL1State({ phase: "processing", logs: logLines })
+          if (event.type === "log") {
+            continue // logs go to terminal via console.error in API route
           } else if (event.type === "result" && event.data) {
             result = event.data
-            setL1State({ phase: "done", result: event.data, logs: logLines })
+            setL1State({ phase: "done", result: event.data })
           } else if (event.type === "error" && event.message) {
-            setL1State({ phase: "error", message: event.message, logs: logLines })
+            setL1State({ phase: "error", message: event.message })
             return null
           }
         }
       }
       return result
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unknown error"
-      setL1State({ phase: "error", message, logs: logLines })
+      setL1State({ phase: "error", message: err instanceof Error ? err.message : "Unknown error" })
       return null
     }
   }
 
   // -------------------------------------------------------------------------
-  // Level 2 — accepts inventory directly, returns report
+  // Level 2
   // -------------------------------------------------------------------------
   const runGapAnalysis = async (
     inventory: DiscoveryResult,
     useCases: string,
   ): Promise<GapReport | null> => {
-    setL2State({ phase: "processing", logs: [] })
-
-    let logLines: string[] = []
+    setL2State({ phase: "processing" })
 
     try {
       const res = await fetch("/api/analyze", {
@@ -453,7 +500,7 @@ export default function HomePage() {
 
       if (!res.ok || !res.body) {
         const data = await res.json()
-        setL2State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        setL2State({ phase: "error", message: data.error ?? "Request failed" })
         return null
       }
 
@@ -475,37 +522,33 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: GapReport }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log" && event.message) {
-            logLines = [...logLines, event.message]
-            setL2State({ phase: "processing", logs: logLines })
+          if (event.type === "log") {
+            continue
           } else if (event.type === "result" && event.data) {
             report = event.data
-            setL2State({ phase: "done", report: event.data, logs: logLines })
+            setL2State({ phase: "done", report: event.data })
           } else if (event.type === "error" && event.message) {
-            setL2State({ phase: "error", message: event.message, logs: logLines })
+            setL2State({ phase: "error", message: event.message })
             return null
           }
         }
       }
       return report
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unknown error"
-      setL2State({ phase: "error", message, logs: logLines })
+      setL2State({ phase: "error", message: err instanceof Error ? err.message : "Unknown error" })
       return null
     }
   }
 
   // -------------------------------------------------------------------------
-  // Level 3 — accepts inventory + report directly
+  // Level 3
   // -------------------------------------------------------------------------
   const runGenerate = async (
     inventory: DiscoveryResult,
     gapReport: GapReport,
   ): Promise<void> => {
-    setL3State({ phase: "processing", logs: [] })
+    setL3State({ phase: "processing" })
     setExpandedBundle(null)
-
-    let logLines: string[] = []
 
     try {
       const res = await fetch("/api/generate", {
@@ -516,7 +559,7 @@ export default function HomePage() {
 
       if (!res.ok || !res.body) {
         const data = await res.json()
-        setL3State({ phase: "error", message: data.error ?? "Request failed", logs: [] })
+        setL3State({ phase: "error", message: data.error ?? "Request failed" })
         return
       }
 
@@ -537,25 +580,23 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: { bundles: GeneratedBundle[] } }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log" && event.message) {
-            logLines = [...logLines, event.message]
-            setL3State({ phase: "processing", logs: logLines })
+          if (event.type === "log") {
+            continue
           } else if (event.type === "result" && event.data) {
-            setL3State({ phase: "done", bundles: event.data.bundles, logs: logLines })
+            setL3State({ phase: "done", bundles: event.data.bundles })
           } else if (event.type === "error" && event.message) {
-            setL3State({ phase: "error", message: event.message, logs: logLines })
+            setL3State({ phase: "error", message: event.message })
             return
           }
         }
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unknown error"
-      setL3State({ phase: "error", message, logs: logLines })
+      setL3State({ phase: "error", message: err instanceof Error ? err.message : "Unknown error" })
     }
   }
 
   // -------------------------------------------------------------------------
-  // Autonomous pipeline — chains all three stages with no user clicks between
+  // Autonomous pipeline
   // -------------------------------------------------------------------------
   const runAll = async () => {
     if (!files.length || !useCaseText.trim()) return
@@ -580,7 +621,6 @@ export default function HomePage() {
     setUseCaseText("")
   }
 
-  // Derived values
   const isRunning =
     l1State.phase === "processing" ||
     l2State.phase === "processing" ||
@@ -588,16 +628,10 @@ export default function HomePage() {
 
   const hasStarted = l1State.phase !== "idle"
 
-  const l1Logs = l1State.phase === "processing" || l1State.phase === "done" || l1State.phase === "error" ? l1State.logs : []
   const l1Result = l1State.phase === "done" ? l1State.result : null
-
-  const l2Logs = l2State.phase === "processing" || l2State.phase === "done" || l2State.phase === "error" ? l2State.logs : []
   const l2Report = l2State.phase === "done" ? l2State.report : null
-
-  const l3Logs = l3State.phase === "processing" || l3State.phase === "done" || l3State.phase === "error" ? l3State.logs : []
   const l3Bundles = l3State.phase === "done" ? l3State.bundles : null
 
-  // Pipeline progress stages
   const l3StageStatus = (): StageStatus => {
     if (l3State.phase !== "idle") return l3State.phase as StageStatus
     if (l2State.phase === "done" && l2Report && l2Report.missing_integrations === 0) return "skipped"
@@ -636,78 +670,94 @@ export default function HomePage() {
   ]
 
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
-          <span className="text-white text-sm font-bold">A</span>
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center shadow-md">
+            <span className="text-white text-sm font-bold">A</span>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">Aivar Discovery Agent</h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Enterprise system discovery &amp; integration gap analysis</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">Aivar Discovery Agent</h1>
-          <p className="text-xs text-slate-500">Enterprise system discovery &amp; integration gap analysis</p>
-        </div>
+
+        {theme && (
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors shadow-sm bg-white dark:bg-slate-900"
+            aria-label="Toggle theme"
+          >
+            {theme === "light" ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
+              </svg>
+            )}
+          </button>
+        )}
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Unified input panel                                               */}
-        {/* ---------------------------------------------------------------- */}
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100">
-            <h2 className="text-sm font-semibold text-slate-700">Configure Analysis</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
+        {/* Input panel */}
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800/80 overflow-hidden shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-850 bg-slate-50/50 dark:bg-slate-900/30">
+            <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300">Configure Analysis</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               Upload your architecture documents and describe your automation goals — the agent will discover systems, analyse gaps, and generate connectors automatically.
             </p>
           </div>
 
           <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Left column — file upload */}
+            {/* Left — file upload */}
             <div className="space-y-3">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wide">
                 Architecture Documents
               </p>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 dark:text-slate-500">
                 Runbooks, system inventories, architecture diagrams, contracts — anything describing your tech stack.
               </p>
 
-              {/* Dropzone */}
               <div
                 {...getRootProps()}
-                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-300
                   ${isDragActive
-                    ? "border-brand-500 bg-brand-50"
-                    : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-white"
+                    ? "border-brand-500 bg-brand-50/50 dark:bg-brand-950/20"
+                    : "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/20 hover:border-brand-400 dark:hover:border-brand-500 hover:bg-white dark:hover:bg-slate-900"
                   }
                   ${isRunning ? "pointer-events-none opacity-60" : ""}`}
               >
                 <input {...getInputProps()} />
                 <div className="flex flex-col items-center gap-2 text-slate-500">
-                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-8 h-8 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                       d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
-                  <p className="text-sm font-medium text-slate-700">
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                     {isDragActive ? "Drop files here" : "Drop files or click to browse"}
                   </p>
-                  <p className="text-xs text-slate-400">PDF, DOCX, PPTX, XLSX, CSV, MD, TXT, PNG, JPG</p>
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500">PDF, DOCX, PPTX, XLSX, CSV, MD, TXT, PNG, JPG</p>
                 </div>
               </div>
 
-              {/* File list */}
               {files.length > 0 && (
-                <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800/80 max-h-48 overflow-y-auto">
                   {files.map((f) => (
-                    <div key={f.name} className="flex items-center px-3 py-2 gap-2">
-                      <span className="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 uppercase shrink-0">
+                    <div key={f.name} className="flex items-center px-3 py-2 gap-2 hover:bg-slate-50 dark:hover:bg-slate-950/50">
+                      <span className="text-[10px] font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-455 uppercase shrink-0">
                         {f.name.split(".").pop()}
                       </span>
-                      <span className="flex-1 text-xs text-slate-700 truncate">{f.name}</span>
-                      <span className="text-xs text-slate-400 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                      <span className="flex-1 text-xs text-slate-700 dark:text-slate-300 truncate font-medium">{f.name}</span>
+                      <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
                       <button
                         onClick={() => removeFile(f.name)}
                         disabled={isRunning}
-                        className="text-slate-400 hover:text-red-500 transition-colors disabled:opacity-40"
+                        className="text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors disabled:opacity-40"
                       >
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -719,12 +769,12 @@ export default function HomePage() {
               )}
             </div>
 
-            {/* Right column — use cases */}
+            {/* Right — use cases */}
             <div className="space-y-3">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wide">
                 Automation Goals
               </p>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 dark:text-slate-500">
                 One goal per line — describe what business outcomes you want to automate across your systems.
               </p>
               <textarea
@@ -738,20 +788,20 @@ export default function HomePage() {
                   "Notify the team when a high-priority ticket is created"
                 }
                 rows={9}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-800
-                  placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500
-                  disabled:bg-slate-50 disabled:text-slate-400 resize-none font-mono"
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2.5 text-sm text-slate-800 dark:text-slate-200
+                  placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500
+                  disabled:bg-slate-50 dark:disabled:bg-slate-950 disabled:text-slate-400 dark:disabled:text-slate-600 resize-none font-mono bg-white dark:bg-slate-950"
               />
             </div>
           </div>
 
           {/* Actions footer */}
-          <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-3">
+          <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-850 flex items-center gap-3 bg-slate-50/50 dark:bg-slate-900/10">
             <button
               onClick={runAll}
               disabled={!files.length || !useCaseText.trim() || isRunning}
-              className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700
-                disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-semibold hover:bg-brand-700
+                disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-brand-500/10 hover:shadow-lg hover:shadow-brand-500/20 flex items-center gap-2 text-sm"
             >
               {isRunning ? (
                 <>
@@ -759,7 +809,7 @@ export default function HomePage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Running...
+                  Running Pipeline...
                 </>
               ) : (
                 "Run Full Analysis"
@@ -769,45 +819,32 @@ export default function HomePage() {
             {hasStarted && !isRunning && (
               <button
                 onClick={reset}
-                className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                className="px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
               >
                 Reset
               </button>
             )}
 
             {!files.length && (
-              <p className="text-xs text-slate-400">Upload at least one document to begin</p>
+              <p className="text-xs text-slate-400 dark:text-slate-550">Upload at least one document to begin</p>
             )}
             {files.length > 0 && !useCaseText.trim() && (
-              <p className="text-xs text-slate-400">Add at least one automation goal to begin</p>
+              <p className="text-xs text-slate-400 dark:text-slate-550">Add at least one automation goal to begin</p>
             )}
           </div>
         </div>
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Pipeline progress                                                  */}
-        {/* ---------------------------------------------------------------- */}
+        {/* Pipeline progress */}
         {hasStarted && <PipelineProgress stages={pipelineStages} />}
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Level 1 results                                                    */}
-        {/* ---------------------------------------------------------------- */}
+        {/* Level 1 */}
         {hasStarted && (
           <div className="space-y-4">
-            {/* L1 log panel */}
-            <LogPanel logs={l1Logs} active={l1State.phase === "processing"} label="Discovery logs" />
+            {l1State.phase === "processing" && <ProcessingCard message={l1Msg} />}
+            {l1State.phase === "error" && <ErrorCard message={l1State.message} />}
 
-            {/* L1 error */}
-            {l1State.phase === "error" && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-                <strong>Error:</strong> {l1State.message}
-              </div>
-            )}
-
-            {/* L1 results */}
             {l1Result && (
               <div className="space-y-4">
-                {/* Stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
                     { label: "Documents", value: l1Result.total_documents_processed },
@@ -815,14 +852,13 @@ export default function HomePage() {
                     { label: "Relationships", value: l1Result.graph_stats.total_edges },
                     { label: "Flagged for Review", value: l1Result.systems_flagged_for_review },
                   ].map(({ label, value }) => (
-                    <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
-                      <p className="text-2xl font-bold text-slate-900">{value}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                    <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">{value}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{label}</p>
                     </div>
                   ))}
                 </div>
 
-                {/* Download L1 */}
                 <div className="flex justify-end">
                   <button
                     onClick={() => {
@@ -834,7 +870,7 @@ export default function HomePage() {
                       a.click()
                       URL.revokeObjectURL(url)
                     }}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -844,89 +880,92 @@ export default function HomePage() {
                   </button>
                 </div>
 
-                {/* L1 tabs */}
-                <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+                <div className="flex gap-1 bg-slate-100 dark:bg-slate-850 rounded-lg p-1 w-fit border border-slate-200/50 dark:border-slate-800">
                   {(["systems", "relationships"] as const).map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
-                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize
-                        ${activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all capitalize
+                        ${activeTab === tab
+                          ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
+                          : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
                     >
                       {tab}
                     </button>
                   ))}
                 </div>
 
-                {/* Systems table */}
                 {activeTab === "systems" && (
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
-                          <th className="px-4 py-3 font-medium text-slate-600">System</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Category</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Criticality</th>
-                          <th className="px-4 py-3 font-medium text-slate-600 w-40">Confidence</th>
-                          <th className="px-4 py-3 font-medium text-slate-600 text-center">Mentions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {l1Result.systems.map((sys, i) => (
-                          <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50" : "hover:bg-slate-50"}>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-slate-900">{sys.canonical_name}</div>
-                              {sys.needs_human_review && sys.review_note && (
-                                <div className="text-xs text-amber-700 mt-0.5">{sys.review_note}</div>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-slate-600">{sys.category}</td>
-                            <td className="px-4 py-3">
-                              <Badge
-                                text={sys.criticality}
-                                color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown}
-                              />
-                            </td>
-                            <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
-                            <td className="px-4 py-3 text-slate-600 text-center">{sys.mention_count}</td>
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">System</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Category</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Criticality</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 w-40">Confidence</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-center">Mentions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {l1Result.systems.map((sys, i) => (
+                            <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50/40 dark:bg-amber-950/10" : "hover:bg-slate-50/30 dark:hover:bg-slate-900/20"}>
+                              <td className="px-4 py-3">
+                                <div className="font-semibold text-slate-900 dark:text-slate-100">{sys.canonical_name}</div>
+                                {sys.needs_human_review && sys.review_note && (
+                                  <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5 font-medium flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                                    {sys.review_note}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-slate-600 dark:text-slate-350">{sys.category}</td>
+                              <td className="px-4 py-3">
+                                <Badge text={sys.criticality} color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown} />
+                              </td>
+                              <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
+                              <td className="px-4 py-3 text-slate-650 dark:text-slate-400 text-center font-mono">{sys.mention_count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                     {l1Result.systems.length === 0 && (
                       <div className="px-4 py-8 text-center text-sm text-slate-400">No systems found</div>
                     )}
                   </div>
                 )}
 
-                {/* Relationships table */}
                 {activeTab === "relationships" && (
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
-                          <th className="px-4 py-3 font-medium text-slate-600">Source</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Relation</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Target</th>
-                          <th className="px-4 py-3 font-medium text-slate-600 w-32">Confidence</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {l1Result.relationships.map((rel, i) => (
-                          <tr key={i} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 font-medium text-slate-900">{rel.source}</td>
-                            <td className="px-4 py-3">
-                              <span className="text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full font-mono">
-                                {rel.relation}
-                              </span>
-                              <span className="ml-2 text-xs text-slate-400">{rel.direction}</span>
-                            </td>
-                            <td className="px-4 py-3 font-medium text-slate-900">{rel.target}</td>
-                            <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Source</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Relation</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Target</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 w-32">Confidence</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {l1Result.relationships.map((rel, i) => (
+                            <tr key={i} className="hover:bg-slate-50/30 dark:hover:bg-slate-900/20">
+                              <td className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-200">{rel.source}</td>
+                              <td className="px-4 py-3">
+                                <span className="text-[10px] bg-brand-100 dark:bg-brand-950/60 text-brand-700 dark:text-brand-400 px-2 py-0.5 rounded-full font-bold font-mono border border-brand-200/30">
+                                  {rel.relation}
+                                </span>
+                                <span className="ml-2 text-xs text-slate-400 dark:text-slate-500 font-medium">{rel.direction}</span>
+                              </td>
+                              <td className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-200">{rel.target}</td>
+                              <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                     {l1Result.relationships.length === 0 && (
                       <div className="px-4 py-8 text-center text-sm text-slate-400">No relationships found</div>
                     )}
@@ -937,25 +976,14 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Level 2 results                                                    */}
-        {/* ---------------------------------------------------------------- */}
+        {/* Level 2 */}
         {l2State.phase !== "idle" && (
           <div className="space-y-4">
-            {/* L2 log panel */}
-            <LogPanel logs={l2Logs} active={l2State.phase === "processing"} label="Gap analysis logs" />
+            {l2State.phase === "processing" && <ProcessingCard message={l2Msg} />}
+            {l2State.phase === "error" && <ErrorCard message={l2State.message} />}
 
-            {/* L2 error */}
-            {l2State.phase === "error" && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-                <strong>Error:</strong> {l2State.message}
-              </div>
-            )}
-
-            {/* L2 results */}
             {l2Report && (
               <div className="space-y-4">
-                {/* L2 stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
                     { label: "Use Cases Mapped", value: l2Report.use_cases_analyzed },
@@ -963,14 +991,13 @@ export default function HomePage() {
                     { label: "Missing / Partial", value: l2Report.missing_integrations },
                     { label: "Unmapped Use Cases", value: l2Report.skipped.unmapped_use_cases.length },
                   ].map(({ label, value }) => (
-                    <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
-                      <p className="text-2xl font-bold text-slate-900">{value}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                    <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">{value}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{label}</p>
                     </div>
                   ))}
                 </div>
 
-                {/* Download L2 */}
                 <div className="flex justify-end">
                   <button
                     onClick={() => {
@@ -982,7 +1009,7 @@ export default function HomePage() {
                       a.click()
                       URL.revokeObjectURL(url)
                     }}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -992,8 +1019,7 @@ export default function HomePage() {
                   </button>
                 </div>
 
-                {/* L2 tabs */}
-                <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+                <div className="flex gap-1 bg-slate-100 dark:bg-slate-850 rounded-lg p-1 w-fit border border-slate-200/50 dark:border-slate-800">
                   {([
                     { key: "gaps", label: `Gaps (${l2Report.gaps.length})` },
                     { key: "dependencies", label: `Dependencies (${l2Report.dependency_graph.length})` },
@@ -1002,100 +1028,94 @@ export default function HomePage() {
                     <button
                       key={key}
                       onClick={() => setL2Tab(key)}
-                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors
-                        ${l2Tab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all
+                        ${l2Tab === key
+                          ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
+                          : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
                     >
                       {label}
                     </button>
                   ))}
                 </div>
 
-                {/* Gaps table */}
                 {l2Tab === "gaps" && (
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-200 bg-slate-50 text-left">
-                          <th className="px-4 py-3 font-medium text-slate-600">Integration</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Status</th>
-                          <th className="px-4 py-3 font-medium text-slate-600">Effort</th>
-                          <th className="px-4 py-3 font-medium text-slate-600 text-center">Blocked</th>
-                          <th className="px-4 py-3 font-medium text-slate-600 text-right">Priority</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {l2Report.gaps.map((gap, i) => (
-                          <tr key={i} className={gap.status === "missing" ? "bg-red-50/40" : "hover:bg-slate-50"}>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-slate-900">
-                                {gap.source_system} to {gap.destination_system}
-                              </div>
-                              {gap.entities.length > 0 && (
-                                <div className="text-xs text-slate-500 mt-0.5">
-                                  {gap.entities.join(", ")}
-                                </div>
-                              )}
-                              {gap.effort_rationale && (
-                                <div className="text-xs text-slate-400 mt-1 italic">{gap.effort_rationale}</div>
-                              )}
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge
-                                text={gap.status}
-                                color={STATUS_COLORS[gap.status] ?? "bg-slate-100 text-slate-600"}
-                              />
-                            </td>
-                            <td className="px-4 py-3">
-                              {gap.effort ? (
-                                <div className="flex flex-col gap-0.5">
-                                  <Badge
-                                    text={gap.effort}
-                                    color={EFFORT_COLORS[gap.effort] ?? "bg-slate-100 text-slate-600"}
-                                  />
-                                  <span className="text-xs text-slate-400">{EFFORT_LABELS[gap.effort]}</span>
-                                </div>
-                              ) : (
-                                <span className="text-xs text-slate-400">-</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-center text-slate-600">
-                              {gap.use_cases_blocked.length}
-                            </td>
-                            <td className="px-4 py-3 text-right font-mono text-sm text-slate-700">
-                              {gap.priority_score.toFixed(0)}
-                            </td>
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Integration</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Status</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Effort</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-center">Blocked</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-right">Priority</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                          {l2Report.gaps.map((gap, i) => (
+                            <tr key={i} className={gap.status === "missing" ? "bg-red-50/20 dark:bg-red-950/10 hover:bg-red-50/30 dark:hover:bg-red-950/15" : "hover:bg-slate-50/30 dark:hover:bg-slate-900/20"}>
+                              <td className="px-4 py-3">
+                                <div className="font-semibold text-slate-900 dark:text-slate-150">
+                                  {gap.source_system} to {gap.destination_system}
+                                </div>
+                                {gap.entities.length > 0 && (
+                                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
+                                    {gap.entities.join(", ")}
+                                  </div>
+                                )}
+                                {gap.effort_rationale && (
+                                  <div className="text-xs text-slate-400 dark:text-slate-500 mt-1 italic font-medium">{gap.effort_rationale}</div>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge text={gap.status} color={STATUS_COLORS[gap.status] ?? "bg-slate-100 text-slate-600"} />
+                              </td>
+                              <td className="px-4 py-3">
+                                {gap.effort ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <Badge text={gap.effort} color={EFFORT_COLORS[gap.effort] ?? "bg-slate-100 text-slate-600"} />
+                                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold">{EFFORT_LABELS[gap.effort]}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400 dark:text-slate-550 font-mono">-</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-center text-slate-600 dark:text-slate-450 font-mono font-semibold">
+                                {gap.use_cases_blocked.length}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono text-sm text-slate-700 dark:text-slate-300 font-bold">
+                                {gap.priority_score.toFixed(0)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                     {l2Report.gaps.length === 0 && (
-                      <div className="px-4 py-8 text-center text-sm text-slate-400">
-                        No integration gaps detected
-                      </div>
+                      <div className="px-4 py-8 text-center text-sm text-slate-400">No integration gaps detected</div>
                     )}
                   </div>
                 )}
 
-                {/* Dependencies table */}
                 {l2Tab === "dependencies" && (
                   <div className="space-y-3">
                     {l2Report.dependency_graph.length === 0 ? (
-                      <div className="bg-white rounded-xl border border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-8 text-center text-sm text-slate-400">
                         No blocking dependencies
                       </div>
                     ) : (
                       l2Report.dependency_graph.map((dep, i) => (
-                        <div key={i} className="bg-white rounded-xl border border-slate-200 p-4">
+                        <div key={i} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
                           <div className="flex items-start gap-3">
-                            <span className="mt-0.5 px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-xs font-mono whitespace-nowrap">
+                            <span className="mt-0.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold font-mono whitespace-nowrap border border-slate-200/50 dark:border-slate-700">
                               {dep.integration}
                             </span>
                             <div className="flex-1">
-                              <p className="text-xs text-slate-500 mb-1 font-medium">must exist before:</p>
+                              <p className="text-xs text-slate-500 dark:text-slate-450 mb-1 font-semibold">must exist before:</p>
                               <ul className="space-y-1">
                                 {dep.required_before.map((uc, j) => (
-                                  <li key={j} className="text-sm text-slate-700 flex items-start gap-1.5">
-                                    <span className="text-slate-400 mt-0.5">-</span>
+                                  <li key={j} className="text-sm text-slate-750 dark:text-slate-350 flex items-start gap-1.5">
+                                    <span className="text-slate-400 dark:text-slate-600 mt-0.5">-</span>
                                     {uc}
                                   </li>
                                 ))}
@@ -1108,19 +1128,18 @@ export default function HomePage() {
                   </div>
                 )}
 
-                {/* Skipped panel */}
                 {l2Tab === "skipped" && (
                   <div className="space-y-4">
                     {l2Report.skipped.unmapped_use_cases.length > 0 && (
-                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                          <p className="text-sm font-medium text-slate-700">Unmapped use cases</p>
+                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
+                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Unmapped use cases</p>
                         </div>
-                        <div className="divide-y divide-slate-100">
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
                           {l2Report.skipped.unmapped_use_cases.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800">{item.text}</p>
-                              <p className="text-xs text-slate-500 mt-0.5">{item.reason}</p>
+                              <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">{item.text}</p>
+                              <p className="text-xs text-slate-550 dark:text-slate-450 mt-0.5">{item.reason}</p>
                             </div>
                           ))}
                         </div>
@@ -1128,16 +1147,16 @@ export default function HomePage() {
                     )}
 
                     {l2Report.skipped.rejected_systems.length > 0 && (
-                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                          <p className="text-sm font-medium text-slate-700">Rejected systems (not in inventory)</p>
+                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
+                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Rejected systems (not in inventory)</p>
                         </div>
-                        <div className="divide-y divide-slate-100">
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
                           {l2Report.skipped.rejected_systems.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800 font-medium">{item.system}</p>
-                              <p className="text-xs text-slate-500">{item.use_case}</p>
-                              <p className="text-xs text-slate-400 mt-0.5">{item.reason}</p>
+                              <p className="text-sm text-slate-800 dark:text-slate-200 font-bold">{item.system}</p>
+                              <p className="text-xs text-slate-550 dark:text-slate-450">{item.use_case}</p>
+                              <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 italic">{item.reason}</p>
                             </div>
                           ))}
                         </div>
@@ -1145,15 +1164,15 @@ export default function HomePage() {
                     )}
 
                     {l2Report.skipped.missing_capabilities.length > 0 && (
-                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                          <p className="text-sm font-medium text-slate-700">Missing capabilities</p>
+                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
+                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Missing capabilities</p>
                         </div>
-                        <div className="divide-y divide-slate-100">
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
                           {l2Report.skipped.missing_capabilities.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800">{item.capability_needed}</p>
-                              <p className="text-xs text-slate-500">{item.use_case}</p>
+                              <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">{item.capability_needed}</p>
+                              <p className="text-xs text-slate-550 dark:text-slate-450">{item.use_case}</p>
                             </div>
                           ))}
                         </div>
@@ -1163,7 +1182,7 @@ export default function HomePage() {
                     {l2Report.skipped.unmapped_use_cases.length === 0 &&
                       l2Report.skipped.rejected_systems.length === 0 &&
                       l2Report.skipped.missing_capabilities.length === 0 && (
-                      <div className="bg-white rounded-xl border border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-8 text-center text-sm text-slate-400">
                         Nothing was skipped — all use cases were mapped successfully
                       </div>
                     )}
@@ -1174,43 +1193,32 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Level 3 results                                                    */}
-        {/* ---------------------------------------------------------------- */}
+        {/* Level 3 */}
         {l3State.phase !== "idle" && (
           <div className="space-y-4">
-            {/* L3 log panel */}
-            <LogPanel logs={l3Logs} active={l3State.phase === "processing"} label="Generation logs" />
+            {l3State.phase === "processing" && <ProcessingCard message={l3Msg} />}
+            {l3State.phase === "error" && <ErrorCard message={l3State.message} />}
 
-            {/* L3 error */}
-            {l3State.phase === "error" && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-                <strong>Error:</strong> {l3State.message}
-              </div>
-            )}
-
-            {/* L3 bundles */}
             {l3Bundles && l3Bundles.length > 0 && (
               <div className="space-y-4">
-                {/* Summary + Download All */}
                 <div className="flex flex-wrap items-start gap-4">
                   <div className="grid grid-cols-4 gap-4 flex-1">
                     {[
-                      { label: "Bundles", value: l3Bundles.length, color: "text-slate-900" },
-                      { label: "Passed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700" },
-                      { label: "Failed Validation", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700" },
-                      { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700" },
+                      { label: "Bundles", value: l3Bundles.length, color: "text-slate-900 dark:text-slate-100" },
+                      { label: "Passed", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700 dark:text-green-400" },
+                      { label: "Failed", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700 dark:text-red-400" },
+                      { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700 dark:text-amber-400" },
                     ].map(({ label, value, color }) => (
-                      <div key={label} className="bg-white rounded-xl border border-slate-200 p-4">
+                      <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
                         <p className={`text-2xl font-bold ${color}`}>{value}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-450 mt-0.5 font-medium">{label}</p>
                       </div>
                     ))}
                   </div>
                   {l3Bundles.some(b => !b.manual_setup_required) && (
                     <button
                       onClick={() => downloadAllBundles(l3Bundles.filter(b => !b.manual_setup_required))}
-                      className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors whitespace-nowrap"
+                      className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-semibold hover:bg-brand-700 transition-all shadow-md shadow-brand-500/10 hover:shadow-lg whitespace-nowrap"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -1221,23 +1229,21 @@ export default function HomePage() {
                   )}
                 </div>
 
-                {/* Bundle cards */}
                 {l3Bundles.map((bundle, i) => (
-                  <div key={i} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    {/* Header */}
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-                      <div className="font-medium text-slate-900">{bundle.gap_key}</div>
+                  <div key={i} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/10">
+                      <div className="font-bold text-slate-900 dark:text-slate-200">{bundle.gap_key}</div>
                       <div className="flex items-center gap-2">
                         {bundle.manual_setup_required
-                          ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">MANUAL SETUP</span>
+                          ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/40">MANUAL SETUP</span>
                           : bundle.validation.valid
-                            ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">VALID</span>
-                            : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">INVALID</span>
+                            ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40">VALID</span>
+                            : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40">INVALID</span>
                         }
                         {!bundle.manual_setup_required && (
                           <button
                             onClick={() => downloadBundle(bundle)}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
                           >
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -1249,50 +1255,47 @@ export default function HomePage() {
                       </div>
                     </div>
 
-                    {/* Paradigm note */}
                     {bundle.manual_setup_required && bundle.paradigm_notes && (
-                      <div className="px-4 py-3 bg-amber-50 border-b border-slate-100">
-                        <p className="text-xs font-semibold text-amber-800 mb-1">
+                      <div className="px-4 py-3 bg-amber-50/50 dark:bg-amber-950/10 border-b border-slate-100 dark:border-slate-800">
+                        <p className="text-xs font-bold text-amber-800 dark:text-amber-400 mb-1">
                           Why auto-generation was skipped ({bundle.paradigm.replace("_", " ")}):
                         </p>
-                        <p className="text-xs text-amber-700 leading-relaxed whitespace-pre-wrap">
+                        <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed whitespace-pre-wrap font-medium">
                           {bundle.paradigm_notes}
                         </p>
                       </div>
                     )}
 
-                    {/* Validation checks */}
                     {!bundle.manual_setup_required && (
-                      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100">
+                      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-900/5">
                         {[
                           { label: "Compiles", ok: bundle.validation.connector_compiles },
                           { label: "Imports", ok: bundle.validation.connector_imports },
                           { label: "YAML valid", ok: bundle.validation.agent_def_valid },
                           { label: "Tests pass", ok: bundle.validation.tests_pass },
                         ].map(({ label, ok }) => (
-                          <div key={label} className="flex items-center gap-1.5 text-xs">
-                            <span className={ok ? "text-green-600 font-bold" : "text-red-500 font-bold"}>
+                          <div key={label} className="flex items-center gap-1.5 text-xs font-medium">
+                            <span className={ok ? "text-green-600 dark:text-green-400 font-bold" : "text-red-500 dark:text-red-400 font-bold"}>
                               {ok ? "✓" : "✗"}
                             </span>
-                            <span className={ok ? "text-slate-700" : "text-slate-400"}>{label}</span>
+                            <span className={ok ? "text-slate-700 dark:text-slate-350" : "text-slate-400 dark:text-slate-500"}>{label}</span>
                           </div>
                         ))}
                       </div>
                     )}
 
-                    {/* Failure details */}
                     {!bundle.manual_setup_required && bundle.validation.failures.length > 0 && (
-                      <div className="px-4 py-3 bg-red-50 border-b border-slate-100">
-                        <p className="text-xs font-medium text-red-700 mb-1.5">Failure details:</p>
+                      <div className="px-4 py-3 bg-red-50/50 dark:bg-red-950/10 border-b border-slate-100 dark:border-slate-800">
+                        <p className="text-xs font-bold text-red-700 dark:text-red-400 mb-1.5">Failure details:</p>
                         <ul className="space-y-1">
                           {bundle.validation.failures.map((f, j) => (
-                            <li key={j} className="text-xs text-red-600 font-mono whitespace-pre-wrap break-all">{f}</li>
+                            <li key={j} className="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap break-all">{f}</li>
                           ))}
                         </ul>
                       </div>
                     )}
 
-                    {/* File viewer */}
+                    {/* File viewer — always available for generated bundles */}
                     {!bundle.manual_setup_required && (
                       <>
                         <button
@@ -1300,11 +1303,11 @@ export default function HomePage() {
                             setExpandedBundle(expandedBundle === i ? null : i)
                             setBundleFileTab("connector")
                           }}
-                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs text-slate-500 hover:bg-slate-50 transition-colors"
+                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 transition-colors border-t border-slate-100 dark:border-slate-800"
                         >
-                          <span className="font-medium">View generated files</span>
+                          <span>View generated source code</span>
                           <svg
-                            className={`w-4 h-4 transition-transform ${expandedBundle === i ? "rotate-180" : ""}`}
+                            className={`w-4 h-4 transition-transform duration-200 ${expandedBundle === i ? "rotate-180" : ""}`}
                             fill="none" stroke="currentColor" viewBox="0 0 24 24"
                           >
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1312,8 +1315,8 @@ export default function HomePage() {
                         </button>
 
                         {expandedBundle === i && (
-                          <div className="border-t border-slate-100">
-                            <div className="flex flex-wrap gap-0.5 bg-slate-100 p-1">
+                          <div className="border-t border-slate-150 dark:border-slate-800">
+                            <div className="flex flex-wrap gap-0.5 bg-slate-100 dark:bg-slate-850 p-1 border-b border-slate-200 dark:border-slate-800">
                               {([
                                 { key: "connector",    label: "connector.py" },
                                 { key: "agent_def",    label: "agent_def.yaml" },
@@ -1324,14 +1327,16 @@ export default function HomePage() {
                                 <button
                                   key={key}
                                   onClick={() => setBundleFileTab(key)}
-                                  className={`px-3 py-1 rounded text-xs font-mono transition-colors
-                                    ${bundleFileTab === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                  className={`px-3 py-1 rounded text-xs font-mono font-bold transition-all
+                                    ${bundleFileTab === key
+                                      ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
+                                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
                                 >
                                   {label}
                                 </button>
                               ))}
                             </div>
-                            <pre className="p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap break-all bg-slate-50 max-h-80 overflow-y-auto">
+                            <pre className="p-4 text-xs font-mono text-slate-700 dark:text-slate-350 whitespace-pre-wrap break-all bg-slate-50 dark:bg-slate-950 max-h-80 overflow-y-auto">
                               {bundleFileTab === "connector"    ? bundle.connector_code
                                 : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
                                 : bundleFileTab === "tests"        ? bundle.test_code

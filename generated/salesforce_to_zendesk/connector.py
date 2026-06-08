@@ -28,7 +28,7 @@ DST_BASE_URL = os.environ.get(
     "ZENDESK_BASE_URL",
     "https://myinstance.zendesk.com",
 )
-DST_CREATE_ENDPOINT = "/api/v2/users.json"
+DST_CREATE_ENDPOINT = "/api/v2/tickets.json"
 RETRY_STATUSES = [429, 503]
 MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
@@ -85,8 +85,8 @@ class SourceClient:
             self.session, method, url, "Retry-After", **kwargs
         )
 
-    def list_partners(self, **params: Any) -> List[Dict[str, Any]]:
-        """Return all partner records with offset pagination."""
+    def list_partner_deals(self, **params: Any) -> List[Dict[str, Any]]:
+        """Return all partner_deal records with offset pagination."""
         records: List[Dict[str, Any]] = []
         offset = 0
         limit = params.pop("limit", 100)
@@ -100,8 +100,8 @@ class SourceClient:
             offset += limit
         return records
 
-    def get_partner(self, record_id: str) -> Dict[str, Any]:
-        """Fetch a single partner by ID."""
+    def get_partner_deal(self, record_id: str) -> Dict[str, Any]:
+        """Fetch a single partner_deal by ID."""
         return self._request("GET", SRC_LIST_ENDPOINT + "/" + record_id).json()
 
 
@@ -120,26 +120,26 @@ class DestinationClient:
             self.session, method, url, "Retry-After", **kwargs
         )
 
-    def create_partner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new partner in Zendesk."""
+    def create_partner_deal(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new partner_deal in Zendesk."""
         return self._request("POST", DST_CREATE_ENDPOINT, json=payload).json()
 
-    def update_partner(
+    def update_partner_deal(
         self, record_id: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update an existing partner by ID."""
+        """Update an existing partner_deal by ID."""
         return self._request(
             "PATCH", DST_CREATE_ENDPOINT + "/" + record_id, json=payload
         ).json()
 
-    def delete_partner(self, record_id: str) -> None:
-        """Delete a partner by ID."""
+    def delete_partner_deal(self, record_id: str) -> None:
+        """Delete a partner_deal by ID."""
         self._request("DELETE", DST_CREATE_ENDPOINT + "/" + record_id)
 
 
 class SalesforceToZendeskConnector:
     """
-    Orchestrator: reads partners from Salesforce
+    Orchestrator: reads partner_deals from Salesforce
     and writes them to Zendesk.
     """
 
@@ -147,9 +147,9 @@ class SalesforceToZendeskConnector:
         self.source = SourceClient(src_token)
         self.destination = DestinationClient(dst_token)
 
-    def sync_partners(self) -> int:
-        """Fetch all partners from source and create them in destination."""
-        records = self.source.list_partners()
+    def sync_partner_deals(self) -> int:
+        """Fetch all partner_deals from source and create them in destination."""
+        records = self.source.list_partner_deals()
         for record in records:
-            self.destination.create_partner(record)
+            self.destination.create_partner_deal(record)
         return len(records)

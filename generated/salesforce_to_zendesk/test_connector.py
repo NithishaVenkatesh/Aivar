@@ -32,7 +32,7 @@ from connector import (
 _SRC_LIST_URL = SRC_BASE_URL.rstrip("/") + "/" + SRC_LIST_ENDPOINT.lstrip("/")
 _DST_CREATE_URL = DST_BASE_URL.rstrip("/") + "/" + DST_CREATE_ENDPOINT.lstrip("/")
 
-MOCK_LIST_RESPONSE = {'records': [{'Id': '001d300000000abc', 'Name': 'John Doe', 'Email': 'john.doe@example.com'}, {'Id': '001d300000000def', 'Name': 'Jane Doe', 'Email': 'jane.doe@example.com'}]}
+MOCK_LIST_RESPONSE = {'records': [{'Id': '001d300000000abc', 'Name': 'Sample Partner Deal'}, {'Id': '001d300000000def', 'Name': 'Another Partner Deal'}]}
 _LIST_KEY = "records"
 _MOCK_RECORDS = MOCK_LIST_RESPONSE.get(_LIST_KEY, [])
 # Non-empty key: connector reads records via data.get("records", [])
@@ -52,21 +52,21 @@ def _make_connector() -> SalesforceToZendeskConnector:
 
 
 @resp_lib.activate
-def test_list_partners_returns_items():
+def test_list_partner_deals_returns_items():
     resp_lib.add(resp_lib.GET, _SRC_LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_source()
-    result = client.list_partners()
+    result = client.list_partner_deals()
     assert isinstance(result, list)
     assert result == _MOCK_RECORDS
 
 
 @resp_lib.activate
-def test_create_partner_sends_payload():
-    payload = {"name": "test-partner"}
+def test_create_partner_deal_sends_payload():
+    payload = {"name": "test-partner_deal"}
     created = {"id": "new-id", **payload}
     resp_lib.add(resp_lib.POST, _DST_CREATE_URL, json=created, status=201)
     client = _make_destination()
-    result = client.create_partner(payload)
+    result = client.create_partner_deal(payload)
     assert result.get("id") == "new-id"
     assert len(resp_lib.calls) == 1
     assert resp_lib.calls[0].request.method == "POST"
@@ -77,16 +77,16 @@ def test_raises_on_server_error():
     resp_lib.add(resp_lib.GET, _SRC_LIST_URL, json={"error": "not found"}, status=404)
     client = _make_source()
     with pytest.raises(HTTPError):
-        client.list_partners()
+        client.list_partner_deals()
 
 
 @resp_lib.activate
-def test_delete_partner_sends_request():
+def test_delete_partner_deal_sends_request():
     record_id = "test-id"
     del_url = _DST_CREATE_URL.rstrip("/") + "/" + record_id
     resp_lib.add(resp_lib.DELETE, del_url, status=204)
     client = _make_destination()
-    client.delete_partner(record_id)
+    client.delete_partner_deal(record_id)
     assert len(resp_lib.calls) == 1
     assert resp_lib.calls[0].request.method == "DELETE"
 
@@ -100,7 +100,7 @@ def test_retries_on_429():
     )
     resp_lib.add(resp_lib.GET, _SRC_LIST_URL, json=_TERMINAL_LIST_RESPONSE, status=200)
     client = _make_source()
-    result = client.list_partners()
+    result = client.list_partner_deals()
     assert isinstance(result, list)
     assert len(resp_lib.calls) == 2, (
         f"Expected 2 calls (1 retry), got {len(resp_lib.calls)} — retry logic may be missing"
@@ -113,5 +113,5 @@ def test_sync_reads_source_and_writes_destination():
     for _ in _MOCK_RECORDS:
         resp_lib.add(resp_lib.POST, _DST_CREATE_URL, json={"id": "new-id"}, status=201)
     connector = _make_connector()
-    count = connector.sync_partners()
+    count = connector.sync_partner_deals()
     assert count == len(_MOCK_RECORDS)
