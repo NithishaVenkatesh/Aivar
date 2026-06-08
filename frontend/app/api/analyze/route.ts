@@ -62,10 +62,7 @@ export async function POST(req: NextRequest) {
           console.error("[analyze]", trimmed)
           
           const mapped = mapAnalyzeLog(trimmed)
-          if (mapped) {
-            send({ type: "log", message: `[USER] ${mapped}` })
-          }
-          send({ type: "log", message: `[DEV] ${trimmed}` })
+          if (mapped) send({ type: "log", message: mapped })
         }
       })
 

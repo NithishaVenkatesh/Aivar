@@ -22,6 +22,31 @@
 
 ---
 
+### [2026-06-08] Frontend — production UI overhaul (dark theme, business language, product rename)
+
+**Changes:**
+
+- **Product renamed** from "Aivar Discovery Agent" to **Bridgent**. Tab title and header both updated. Tagline: "Connect your business systems, automatically."
+- **True black dark theme**: Dark mode now uses `bg-black` for the page, `bg-zinc-950` for cards, `bg-zinc-900` for elevated surfaces, `border-zinc-900` for borders, `text-white` for headings, `text-zinc-400/500` for secondary text. Replaced all `slate` dark variants with `zinc` throughout.
+- **Removed developer mode toggle** and the `AgentActivityConsole` log viewer. Logs now route to the server terminal only (`console.error` in API routes). UI shows only human-readable cycling status messages via `useStatusMessage` hook.
+- **Removed logo square** from header.
+- **All text rewritten in business language**: No em dashes, no developer terms. Key changes:
+  - Pipeline stages: "Map Your Systems" / "Find Missing Connections" / "Build Integrations"
+  - Tabs: "Systems", "Connections", "Missing Connections", "Build Order", "Not Matched"
+  - Stats labels: "Documents Read", "Systems Found", "Connections Mapped", "Needs Attention", "Goals Reviewed", etc.
+  - Status badges: "Ready to Deploy", "Needs Review", "Manual Setup Required"
+  - Validation checks: "Code Valid", "Dependencies OK", "Config Valid", "Tests Pass"
+  - File viewer tabs: "Integration Code", "Configuration", "Tests", "Dependencies", "Instructions"
+  - Download buttons: "Download Systems Report", "Download Gap Report", "Download All Integrations"
+  - Action button: "Analyse Now" / "Analysing..."
+  - Reset: "Start Over"
+  - Error card no longer mentions the terminal
+- **Simplified `globals.css`**: Removed the `html:not(.transitioning)` transition override system. Scrollbar uses `zinc` colors for dark mode. Body dark background is `bg-black`.
+- **State types simplified**: `logs: string[]` removed from all three state machines.
+- **`downloadJson` helper** extracted to avoid duplicated blob/anchor logic.
+
+---
+
 ### [2026-06-07] Level 3 — AC8 production-readiness fix (Okta connector ~12% wrong lines)
 
 **Problem:** Acceptance criterion AC8 requires <10% of generated connector lines requiring significant changes. Okta connector was 87 lines with ~10–11 lines needing changes (≈12% — above threshold). Six distinct issues:

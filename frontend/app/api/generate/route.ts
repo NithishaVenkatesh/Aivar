@@ -62,10 +62,7 @@ export async function POST(req: NextRequest) {
           console.error("[generate]", trimmed)
           
           const mapped = mapGenerateLog(trimmed)
-          if (mapped) {
-            send({ type: "log", message: `[USER] ${mapped}` })
-          }
-          send({ type: "log", message: `[DEV] ${trimmed}` })
+          if (mapped) send({ type: "log", message: mapped })
         }
       })
 

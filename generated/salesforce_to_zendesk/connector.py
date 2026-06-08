@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 # configured at deploy time without touching this file.
 SRC_BASE_URL = os.environ.get(
     "SALESFORCE_BASE_URL",
-    "https://myinstance.salesforce.com",
+    "https://myinstance.my.salesforce.com",
 )
-SRC_LIST_ENDPOINT = "/services/data/v54.0/query/"
+SRC_LIST_ENDPOINT = "/services/data/v52.0/query/"
 DST_BASE_URL = os.environ.get(
     "ZENDESK_BASE_URL",
     "https://myinstance.zendesk.com",

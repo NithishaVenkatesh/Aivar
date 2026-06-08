@@ -1,11 +1,11 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useDropzone } from "react-dropzone"
 import { createZip, downloadZip } from "../lib/zip"
 
 // ---------------------------------------------------------------------------
-// Level 1 types
+// Types — Level 1
 // ---------------------------------------------------------------------------
 
 interface SystemNode {
@@ -40,7 +40,7 @@ interface DiscoveryResult {
 }
 
 // ---------------------------------------------------------------------------
-// Level 2 types
+// Types — Level 2
 // ---------------------------------------------------------------------------
 
 interface Gap {
@@ -74,23 +74,7 @@ interface GapReport {
 }
 
 // ---------------------------------------------------------------------------
-// State machines (no log arrays — logs go to terminal via console.error)
-// ---------------------------------------------------------------------------
-
-type L1State =
-  | { phase: "idle" }
-  | { phase: "processing" }
-  | { phase: "done"; result: DiscoveryResult }
-  | { phase: "error"; message: string }
-
-type L2State =
-  | { phase: "idle" }
-  | { phase: "processing" }
-  | { phase: "done"; report: GapReport }
-  | { phase: "error"; message: string }
-
-// ---------------------------------------------------------------------------
-// Level 3 types
+// Types — Level 3
 // ---------------------------------------------------------------------------
 
 interface ValidationReport {
@@ -118,6 +102,22 @@ interface GeneratedBundle {
   paradigm_notes: string
 }
 
+// ---------------------------------------------------------------------------
+// State machines — no log arrays (logs go to server terminal)
+// ---------------------------------------------------------------------------
+
+type L1State =
+  | { phase: "idle" }
+  | { phase: "processing" }
+  | { phase: "done"; result: DiscoveryResult }
+  | { phase: "error"; message: string }
+
+type L2State =
+  | { phase: "idle" }
+  | { phase: "processing" }
+  | { phase: "done"; report: GapReport }
+  | { phase: "error"; message: string }
+
 type L3State =
   | { phase: "idle" }
   | { phase: "processing" }
@@ -125,7 +125,7 @@ type L3State =
   | { phase: "error"; message: string }
 
 // ---------------------------------------------------------------------------
-// Shared constants
+// Display constants
 // ---------------------------------------------------------------------------
 
 const CRITICALITY_COLORS: Record<string, string> = {
@@ -133,7 +133,7 @@ const CRITICALITY_COLORS: Record<string, string> = {
   high: "bg-orange-100 dark:bg-orange-950/40 text-orange-800 dark:text-orange-300 border border-orange-200/50 dark:border-orange-800/40",
   medium: "bg-yellow-100 dark:bg-yellow-950/40 text-yellow-800 dark:text-yellow-300 border border-yellow-200/50 dark:border-yellow-800/40",
   low: "bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40",
-  unknown: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50",
+  unknown: "bg-slate-100 dark:bg-zinc-900 text-slate-600 dark:text-zinc-400 border border-slate-200/50 dark:border-zinc-800",
 }
 
 const EFFORT_COLORS: Record<string, string> = {
@@ -144,10 +144,10 @@ const EFFORT_COLORS: Record<string, string> = {
 }
 
 const EFFORT_LABELS: Record<string, string> = {
-  S: "1-3 days",
-  M: "1-2 weeks",
-  L: "3-6 weeks",
-  XL: "2+ months",
+  S: "1 to 3 days",
+  M: "1 to 2 weeks",
+  L: "3 to 6 weeks",
+  XL: "2 or more months",
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -155,46 +155,7 @@ const STATUS_COLORS: Record<string, string> = {
   missing: "bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40",
 }
 
-// ---------------------------------------------------------------------------
-// Cycling status messages shown during processing
-// ---------------------------------------------------------------------------
-
-const L1_MESSAGES = [
-  "Parsing your documents...",
-  "Identifying system names and APIs...",
-  "Building your system inventory...",
-  "Cross-referencing mentions across files...",
-  "Analysing system relationships...",
-  "Calculating confidence scores...",
-]
-
-const L2_MESSAGES = [
-  "Matching goals to discovered systems...",
-  "Identifying missing integrations...",
-  "Scoring integration gaps by priority...",
-  "Mapping dependency order...",
-  "Reviewing unmapped use cases...",
-]
-
-const L3_MESSAGES = [
-  "Generating connector code...",
-  "Writing agent definition YAML...",
-  "Creating test scaffolding...",
-  "Validating generated connectors...",
-  "Packaging connector bundles...",
-]
-
-function useStatusMessage(messages: string[], active: boolean): string {
-  const [index, setIndex] = useState(0)
-
-  useEffect(() => {
-    if (!active) { setIndex(0); return }
-    const id = setInterval(() => setIndex((i) => (i + 1) % messages.length), 2800)
-    return () => clearInterval(id)
-  }, [active, messages.length])
-
-  return messages[index]
-}
+// (timer-based message cycling removed — status now driven by real backend events)
 
 // ---------------------------------------------------------------------------
 // Shared components
@@ -213,30 +174,45 @@ function ConfidenceBar({ value }: { value: number }) {
   const color = pct >= 80 ? "bg-green-500" : pct >= 60 ? "bg-yellow-500" : "bg-red-500"
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
         <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-slate-500 dark:text-slate-400 w-8 text-right font-mono">{pct}%</span>
+      <span className="text-xs text-slate-500 dark:text-zinc-500 w-8 text-right font-mono">{pct}%</span>
     </div>
   )
 }
 
-function ProcessingCard({ message }: { message: string }) {
+function ProcessingFeed({ feed, defaultMsg }: { feed: string[]; defaultMsg: string }) {
+  const latest = feed.length > 0 ? feed[feed.length - 1] : defaultMsg
+  const history = feed.length > 1 ? feed.slice(0, -1).slice(-4).reverse() : []
+
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-6 shadow-sm flex items-center gap-4">
-      <div className="relative flex items-center justify-center shrink-0">
-        <span className="absolute inline-flex h-10 w-10 rounded-full bg-brand-500/20 dark:bg-brand-400/15 agentic-pulse" />
-        <div className="relative w-10 h-10 rounded-full bg-gradient-to-tr from-brand-600 to-indigo-600 dark:from-brand-500 dark:to-indigo-500 flex items-center justify-center shadow-sm">
-          <svg className="w-5 h-5 text-white animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
+    <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 px-5 py-5 shadow-sm">
+      <div className="flex items-center gap-4">
+        <div className="relative flex items-center justify-center shrink-0">
+          <span className="absolute inline-flex h-10 w-10 rounded-full bg-brand-500/20 dark:bg-brand-400/15 agentic-pulse" />
+          <div className="relative w-10 h-10 rounded-full bg-gradient-to-tr from-brand-500 to-brand-700 flex items-center justify-center shadow-sm">
+            <svg className="w-5 h-5 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-slate-800 dark:text-zinc-100">{latest}</p>
+          <p className="text-xs text-slate-400 dark:text-zinc-600 mt-0.5">This may take a few minutes</p>
         </div>
       </div>
-      <div>
-        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 transition-all duration-500">{message}</p>
-        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">This may take a moment — logs are in the terminal</p>
-      </div>
+      {history.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-zinc-900 pl-14 space-y-1.5">
+          {history.map((msg, i) => (
+            <p key={i} className="text-xs text-slate-400 dark:text-zinc-500 flex items-center gap-2">
+              <span className="text-green-500 dark:text-green-400 font-bold shrink-0">&#10003;</span>
+              {msg}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -248,16 +224,253 @@ function ErrorCard({ message }: { message: string }) {
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
       <div>
-        <p className="text-sm font-semibold text-red-700 dark:text-red-300">Something went wrong</p>
+        <p className="text-sm font-semibold text-red-700 dark:text-red-300">We ran into a problem</p>
         <p className="text-sm text-red-600 dark:text-red-400 mt-0.5">{message}</p>
-        <p className="text-xs text-red-400 dark:text-red-500 mt-1">Check the terminal for detailed logs</p>
+        <p className="text-xs text-red-400 dark:text-red-600 mt-1">Please try again. If this keeps happening, contact support.</p>
       </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline progress indicator
+// Network graph (L1 connections visual)
+// ---------------------------------------------------------------------------
+
+const CRIT_COLOR: Record<string, string> = {
+  critical: "#ef4444",
+  high:     "#f97316",
+  medium:   "#eab308",
+  low:      "#22c55e",
+  unknown:  "#71717a",
+}
+
+function SystemGraph({
+  systems,
+  relationships,
+}: {
+  systems: SystemNode[]
+  relationships: SystemRelationship[]
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerW, setContainerW] = useState(700)
+  const [tooltip, setTooltip] = useState<{ sys: SystemNode; x: number; y: number } | null>(null)
+  const GH = 460
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    setContainerW(el.clientWidth || 700)
+    const ro = new ResizeObserver(() => setContainerW(el.clientWidth || 700))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const W = containerW
+
+  // Force-directed layout — runs synchronously (fast for typical enterprise graphs < 40 nodes)
+  const positions = useMemo(() => {
+    if (!systems.length) return new Map<string, { x: number; y: number }>()
+    const n = systems.length
+    const pos = new Map<string, { x: number; y: number; vx: number; vy: number }>()
+
+    // Seed on a circle
+    systems.forEach((s, i) => {
+      const angle = (2 * Math.PI * i) / n - Math.PI / 2
+      const r = Math.min(W, GH) * 0.32
+      pos.set(s.canonical_name, {
+        x: W / 2 + r * Math.cos(angle),
+        y: GH / 2 + r * Math.sin(angle),
+        vx: 0, vy: 0,
+      })
+    })
+
+    const REPULSION = 2800
+    const ATTRACTION = 0.04
+    const IDEAL_DIST = 130
+    const DAMPING = 0.78
+
+    for (let iter = 0; iter < 260; iter++) {
+      const ids = Array.from(pos.keys())
+      // Repulsion between every pair
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const a = pos.get(ids[i])!
+          const b = pos.get(ids[j])!
+          const dx = b.x - a.x || 0.1
+          const dy = b.y - a.y || 0.1
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          const f = REPULSION / (dist * dist)
+          const fx = (dx / dist) * f
+          const fy = (dy / dist) * f
+          a.vx -= fx; a.vy -= fy
+          b.vx += fx; b.vy += fy
+        }
+      }
+      // Spring attraction along edges
+      relationships.forEach(rel => {
+        const a = pos.get(rel.source)
+        const b = pos.get(rel.target)
+        if (!a || !b) return
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1
+        const stretch = dist - IDEAL_DIST
+        const f = stretch * ATTRACTION
+        const fx = (dx / dist) * f
+        const fy = (dy / dist) * f
+        a.vx += fx; a.vy += fy
+        b.vx -= fx; b.vy -= fy
+      })
+      // Gentle gravity toward center
+      pos.forEach(p => {
+        p.vx += (W / 2 - p.x) * 0.003
+        p.vy += (GH / 2 - p.y) * 0.003
+        p.vx *= DAMPING
+        p.vy *= DAMPING
+        p.x = Math.max(52, Math.min(W - 52, p.x + p.vx))
+        p.y = Math.max(48, Math.min(GH - 48, p.y + p.vy))
+      })
+    }
+
+    const result = new Map<string, { x: number; y: number }>()
+    pos.forEach((v, k) => result.set(k, { x: v.x, y: v.y }))
+    return result
+  }, [systems, relationships, W])
+
+  const nodeR = (sys: SystemNode) => Math.max(22, Math.min(40, 18 + sys.mention_count * 2.5))
+
+  return (
+    <div ref={containerRef} className="relative bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+      <svg width="100%" height={GH} viewBox={`0 0 ${W} ${GH}`} style={{ display: "block" }}>
+        <defs>
+          <marker id="gph-arrow" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#64748b" fillOpacity="0.55" />
+          </marker>
+        </defs>
+
+        {/* Edges */}
+        {relationships.map((rel, i) => {
+          const from = positions.get(rel.source)
+          const to   = positions.get(rel.target)
+          if (!from || !to) return null
+          const fromSys = systems.find(s => s.canonical_name === rel.source)
+          const toSys   = systems.find(s => s.canonical_name === rel.target)
+          if (!fromSys || !toSys) return null
+
+          const dx = to.x - from.x
+          const dy = to.y - from.y
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          const rF = nodeR(fromSys)
+          const rT = nodeR(toSys)
+          // Trim endpoints to sit on node circumference
+          const x1 = from.x + (dx / dist) * rF
+          const y1 = from.y + (dy / dist) * rF
+          const x2 = to.x   - (dx / dist) * (rT + 8)
+          const y2 = to.y   - (dy / dist) * (rT + 8)
+          // Slight curve perpendicular to edge direction
+          const mx = (x1 + x2) / 2 + (dy / dist) * 20
+          const my = (y1 + y2) / 2 - (dx / dist) * 20
+
+          return (
+            <path key={i}
+              d={`M${x1},${y1} Q${mx},${my} ${x2},${y2}`}
+              fill="none"
+              stroke="#94a3b8"
+              strokeWidth={1.5}
+              strokeOpacity={0.38}
+              markerEnd="url(#gph-arrow)"
+            />
+          )
+        })}
+
+        {/* Nodes */}
+        {systems.map(sys => {
+          const pos = positions.get(sys.canonical_name)
+          if (!pos) return null
+          const r     = nodeR(sys)
+          const color = CRIT_COLOR[sys.criticality] ?? CRIT_COLOR.unknown
+          const label = sys.canonical_name.length > 13
+            ? sys.canonical_name.slice(0, 11) + "…"
+            : sys.canonical_name
+
+          return (
+            <g key={sys.canonical_name}
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => setTooltip({ sys, x: pos.x, y: pos.y })}
+              onMouseLeave={() => setTooltip(null)}>
+              {/* Soft glow ring */}
+              <circle cx={pos.x} cy={pos.y} r={r + 7} fill={color} fillOpacity={0.1} />
+              {/* Main node */}
+              <circle cx={pos.x} cy={pos.y} r={r} fill={color} fillOpacity={0.88} />
+              {/* Label */}
+              <text x={pos.x} y={pos.y + 4}
+                textAnchor="middle"
+                fill="white"
+                fontSize={r > 30 ? 10 : 9}
+                fontWeight="700"
+                style={{ pointerEvents: "none", userSelect: "none" }}>
+                {label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+
+      {/* Tooltip */}
+      {tooltip && (
+        <div
+          className="absolute bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 shadow-xl pointer-events-none z-20 min-w-[148px]"
+          style={{
+            top: Math.max(8, tooltip.y - 70),
+            ...(tooltip.x > W * 0.65
+              ? { right: W - tooltip.x + 16 }
+              : { left: tooltip.x + 16 }),
+          }}>
+          <p className="text-xs font-bold text-white">{tooltip.sys.canonical_name}</p>
+          <p className="text-[11px] text-zinc-400 mt-0.5">{tooltip.sys.category}</p>
+          <div className="mt-1.5 space-y-0.5">
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="text-zinc-500">Confidence</span>
+              <span className="text-white font-semibold ml-auto">{Math.round(tooltip.sys.confidence)}%</span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="text-zinc-500">Mentions</span>
+              <span className="text-white font-semibold ml-auto">{tooltip.sys.mention_count}</span>
+            </div>
+            {tooltip.sys.auth_method && (
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-zinc-500">Auth</span>
+                <span className="text-white font-semibold ml-auto">{tooltip.sys.auth_method}</span>
+              </div>
+            )}
+            {tooltip.sys.needs_human_review && (
+              <p className="text-amber-400 text-[11px] mt-1">Needs review</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="px-4 py-2.5 border-t border-slate-100 dark:border-zinc-900 flex flex-wrap items-center gap-3">
+        {(["critical", "high", "medium", "low", "unknown"] as const)
+          .filter(lvl => systems.some(s => (s.criticality || "unknown") === lvl))
+          .map(lvl => (
+            <div key={lvl} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full block shrink-0"
+                style={{ background: CRIT_COLOR[lvl] }} />
+              <span className="text-[11px] text-slate-500 dark:text-zinc-500 capitalize">{lvl}</span>
+            </div>
+          ))}
+        <p className="ml-auto text-[11px] text-slate-400 dark:text-zinc-600">
+          {systems.length} systems &middot; {relationships.length} connections &middot; hover for details
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline progress
 // ---------------------------------------------------------------------------
 
 type StageStatus = "idle" | "processing" | "done" | "error" | "skipped"
@@ -268,57 +481,71 @@ function PipelineProgress({
   stages: Array<{ label: string; status: StageStatus; detail?: string }>
 }) {
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800/80 px-5 py-4 shadow-sm">
-      <div className="flex items-start gap-0">
+    <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 px-5 py-4 shadow-sm">
+      {/* Equal-width grid — one column per stage */}
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${stages.length}, 1fr)` }}>
         {stages.map((stage, i) => {
           const { status } = stage
-          const isDone = status === "done"
-          const isActive = status === "processing"
-          const isError = status === "error"
+          const isDone    = status === "done"
+          const isActive  = status === "processing"
+          const isError   = status === "error"
           const isSkipped = status === "skipped"
+          const prevDone  = i > 0 && stages[i - 1].status === "done"
 
           return (
-            <div key={i} className="flex items-start flex-1 min-w-0">
-              <div className="flex flex-col items-center gap-1.5 flex-1 min-w-0">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all
-                  ${isDone   ? "bg-green-500 text-white"
-                  : isActive ? "bg-brand-600 text-white ring-4 ring-brand-100 dark:ring-brand-950"
-                  : isError  ? "bg-red-500 text-white"
-                  : isSkipped? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
-                  :            "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500"}`}
+            <div key={i} className="flex flex-col items-center">
+              {/* Connector halves + bubble on a single row */}
+              <div className="w-full flex items-center">
+                {/* Left half-connector (invisible on first item) */}
+                <div className={`flex-1 h-px transition-colors duration-300
+                  ${i === 0 ? "invisible"
+                  : prevDone ? "bg-green-300 dark:bg-green-900"
+                  : "bg-slate-200 dark:bg-zinc-800"}`}
+                />
+
+                {/* Bubble */}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all duration-300
+                  ${isDone    ? "bg-green-500 text-white"
+                  : isActive  ? "bg-brand-600 text-white ring-4 ring-brand-100 dark:ring-brand-950/50"
+                  : isError   ? "bg-red-500 text-white"
+                  : isSkipped ? "bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-600"
+                  :             "bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-600"}`}
                 >
                   {isDone    ? "✓"
                   : isError  ? "✗"
                   : isActive ? <span className="animate-pulse">{i + 1}</span>
                   :            i + 1}
                 </div>
-                <div className="text-center px-1 min-w-0">
-                  <p className={`text-xs font-semibold leading-tight
-                    ${isDone    ? "text-slate-700 dark:text-slate-300"
-                    : isActive  ? "text-brand-700 dark:text-brand-400"
-                    : isError   ? "text-red-600 dark:text-red-400"
-                    :             "text-slate-400 dark:text-slate-500"}`}
-                  >
-                    {stage.label}
-                  </p>
-                  {stage.detail && (
-                    <p className={`text-[10px] mt-0.5 leading-tight font-medium
-                      ${isDone    ? "text-green-600 dark:text-green-400"
-                      : isActive  ? "text-slate-500 dark:text-slate-400"
-                      : isError   ? "text-red-400 dark:text-red-500"
-                      : isSkipped ? "text-slate-450 dark:text-slate-500"
-                      :             "text-slate-400 dark:text-slate-500"}`}
-                    >
-                      {stage.detail}
-                    </p>
-                  )}
-                </div>
-              </div>
-              {i < stages.length - 1 && (
-                <div className={`h-px w-full mt-4 mx-1 shrink-0 transition-colors
-                  ${isDone ? "bg-green-300 dark:bg-green-900" : "bg-slate-200 dark:bg-slate-800"}`}
-                  style={{ minWidth: "1rem" }}
+
+                {/* Right half-connector (invisible on last item) */}
+                <div className={`flex-1 h-px transition-colors duration-300
+                  ${i === stages.length - 1 ? "invisible"
+                  : isDone ? "bg-green-300 dark:bg-green-900"
+                  : "bg-slate-200 dark:bg-zinc-800"}`}
                 />
+              </div>
+
+              {/* Label — nowrap keeps it on one line */}
+              <p className={`mt-1.5 text-xs font-semibold text-center whitespace-nowrap
+                ${isDone    ? "text-slate-700 dark:text-zinc-300"
+                : isActive  ? "text-brand-700 dark:text-brand-400"
+                : isError   ? "text-red-600 dark:text-red-400"
+                :             "text-slate-400 dark:text-zinc-600"}`}
+              >
+                {stage.label}
+              </p>
+
+              {/* Detail line */}
+              {stage.detail && (
+                <p className={`text-[10px] mt-0.5 text-center whitespace-nowrap font-medium
+                  ${isDone    ? "text-slate-500 dark:text-zinc-500"
+                  : isActive  ? "text-slate-500 dark:text-zinc-500"
+                  : isError   ? "text-red-400 dark:text-red-500"
+                  : isSkipped ? "text-slate-400 dark:text-zinc-600"
+                  :             "text-slate-400 dark:text-zinc-600"}`}
+                >
+                  {stage.detail}
+                </p>
               )}
             </div>
           )
@@ -329,7 +556,7 @@ function PipelineProgress({
 }
 
 // ---------------------------------------------------------------------------
-// Bundle download helpers
+// Download helpers
 // ---------------------------------------------------------------------------
 
 function bundleSlug(b: GeneratedBundle): string {
@@ -355,8 +582,17 @@ function downloadBundle(b: GeneratedBundle): void {
 }
 
 function downloadAllBundles(bundles: GeneratedBundle[]): void {
-  const files = bundles.flatMap(bundleFiles)
-  downloadZip(createZip(files), "connectors.zip")
+  downloadZip(createZip(bundles.flatMap(bundleFiles)), "integrations.zip")
+}
+
+function downloadJson(data: unknown, filename: string): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ---------------------------------------------------------------------------
@@ -373,14 +609,14 @@ export default function HomePage() {
   const [l2State, setL2State] = useState<L2State>({ phase: "idle" })
   const [l3State, setL3State] = useState<L3State>({ phase: "idle" })
 
-  const [activeTab, setActiveTab] = useState<"systems" | "relationships">("systems")
-  const [l2Tab, setL2Tab] = useState<"gaps" | "dependencies" | "skipped">("gaps")
+  const [l1Feed, setL1Feed] = useState<string[]>([])
+  const [l2Feed, setL2Feed] = useState<string[]>([])
+  const [l3Feed, setL3Feed] = useState<string[]>([])
+
+  const [activeTab, setActiveTab] = useState<"systems" | "connections">("systems")
+  const [l2Tab, setL2Tab] = useState<"gaps" | "order" | "unmatched">("gaps")
   const [expandedBundle, setExpandedBundle] = useState<number | null>(null)
   const [bundleFileTab, setBundleFileTab] = useState<"connector" | "agent_def" | "tests" | "requirements" | "readme">("connector")
-
-  const l1Msg = useStatusMessage(L1_MESSAGES, l1State.phase === "processing")
-  const l2Msg = useStatusMessage(L2_MESSAGES, l2State.phase === "processing")
-  const l3Msg = useStatusMessage(L3_MESSAGES, l3State.phase === "processing")
 
   useEffect(() => {
     const saved = localStorage.getItem("aivar-theme") as "light" | "dark" | null
@@ -393,13 +629,11 @@ export default function HomePage() {
     const next = theme === "light" ? "dark" : "light"
     setTheme(next)
     localStorage.setItem("aivar-theme", next)
-    document.documentElement.classList.add("transitioning")
     if (next === "dark") {
       document.documentElement.classList.add("dark")
     } else {
       document.documentElement.classList.remove("dark")
     }
-    setTimeout(() => document.documentElement.classList.remove("transitioning"), 200)
   }
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -433,6 +667,9 @@ export default function HomePage() {
     setL1State({ phase: "processing" })
     setL2State({ phase: "idle" })
     setL3State({ phase: "idle" })
+    setL1Feed([])
+    setL2Feed([])
+    setL3Feed([])
     setExpandedBundle(null)
 
     const form = new FormData()
@@ -464,8 +701,8 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: DiscoveryResult }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log") {
-            continue // logs go to terminal via console.error in API route
+          if (event.type === "log" && event.message) {
+            setL1Feed(prev => [...prev, event.message as string])
           } else if (event.type === "result" && event.data) {
             result = event.data
             setL1State({ phase: "done", result: event.data })
@@ -490,6 +727,7 @@ export default function HomePage() {
     useCases: string,
   ): Promise<GapReport | null> => {
     setL2State({ phase: "processing" })
+    setL2Feed([])
 
     try {
       const res = await fetch("/api/analyze", {
@@ -522,8 +760,8 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: GapReport }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log") {
-            continue
+          if (event.type === "log" && event.message) {
+            setL2Feed(prev => [...prev, event.message as string])
           } else if (event.type === "result" && event.data) {
             report = event.data
             setL2State({ phase: "done", report: event.data })
@@ -548,6 +786,7 @@ export default function HomePage() {
     gapReport: GapReport,
   ): Promise<void> => {
     setL3State({ phase: "processing" })
+    setL3Feed([])
     setExpandedBundle(null)
 
     try {
@@ -580,8 +819,8 @@ export default function HomePage() {
           let event: { type: string; message?: string; data?: { bundles: GeneratedBundle[] } }
           try { event = JSON.parse(line.slice(6)) } catch { continue }
 
-          if (event.type === "log") {
-            continue
+          if (event.type === "log" && event.message) {
+            setL3Feed(prev => [...prev, event.message as string])
           } else if (event.type === "result" && event.data) {
             setL3State({ phase: "done", bundles: event.data.bundles })
           } else if (event.type === "error" && event.message) {
@@ -600,13 +839,10 @@ export default function HomePage() {
   // -------------------------------------------------------------------------
   const runAll = async () => {
     if (!files.length || !useCaseText.trim()) return
-
     const inventory = await runDiscovery()
     if (!inventory) return
-
     const report = await runGapAnalysis(inventory, useCaseText)
     if (!report) return
-
     if (report.missing_integrations > 0) {
       await runGenerate(inventory, report)
     }
@@ -616,6 +852,9 @@ export default function HomePage() {
     setL1State({ phase: "idle" })
     setL2State({ phase: "idle" })
     setL3State({ phase: "idle" })
+    setL1Feed([])
+    setL2Feed([])
+    setL3Feed([])
     setExpandedBundle(null)
     setFiles([])
     setUseCaseText("")
@@ -627,7 +866,6 @@ export default function HomePage() {
     l3State.phase === "processing"
 
   const hasStarted = l1State.phase !== "idle"
-
   const l1Result = l1State.phase === "done" ? l1State.result : null
   const l2Report = l2State.phase === "done" ? l2State.report : null
   const l3Bundles = l3State.phase === "done" ? l3State.bundles : null
@@ -640,53 +878,52 @@ export default function HomePage() {
 
   const pipelineStages = [
     {
-      label: "Discover Systems",
+      label: "Map Systems",
       status: l1State.phase as StageStatus,
-      detail: l1State.phase === "done"
-        ? `${l1Result?.total_systems_found ?? 0} systems found`
-        : l1State.phase === "processing" ? "Analysing documents..."
-        : l1State.phase === "error" ? "Failed"
+      detail:
+        l1State.phase === "done" ? `${l1Result?.total_systems_found ?? 0} systems found`
+        : l1State.phase === "processing" ? "Scanning documents..."
+        : l1State.phase === "error" ? "Could not complete"
         : undefined,
     },
     {
-      label: "Analyse Gaps",
+      label: "Find Gaps",
       status: l2State.phase as StageStatus,
-      detail: l2State.phase === "done"
-        ? `${l2Report?.missing_integrations ?? 0} missing integrations`
-        : l2State.phase === "processing" ? "Mapping use cases..."
-        : l2State.phase === "error" ? "Failed"
+      detail:
+        l2State.phase === "done" ? `${l2Report?.missing_integrations ?? 0} gaps identified`
+        : l2State.phase === "processing" ? "Reviewing goals..."
+        : l2State.phase === "error" ? "Could not complete"
         : undefined,
     },
     {
-      label: "Generate Connectors",
+      label: "Build",
       status: l3StageStatus(),
-      detail: l3State.phase === "done"
-        ? `${l3Bundles?.length ?? 0} bundle(s) generated`
-        : l3State.phase === "processing" ? "Building connectors..."
-        : l3State.phase === "error" ? "Failed"
-        : l3StageStatus() === "skipped" ? "No missing integrations"
+      detail:
+        l3State.phase === "done" ? `${l3Bundles?.length ?? 0} integrations built`
+        : l3State.phase === "processing" ? "Writing code..."
+        : l3State.phase === "error" ? "Could not complete"
+        : l3StageStatus() === "skipped" ? "Already connected"
         : undefined,
     },
   ]
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
   return (
-    <main className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <main className="min-h-screen bg-slate-50 dark:bg-black text-slate-900 dark:text-white">
+
       {/* Header */}
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center shadow-md">
-            <span className="text-white text-sm font-bold">A</span>
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">Aivar Discovery Agent</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Enterprise system discovery &amp; integration gap analysis</p>
-          </div>
+      <header className="bg-white dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-900 px-6 py-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">Bridgent</h1>
+          <p className="text-xs text-slate-400 dark:text-zinc-600 mt-0.5">Connect your business systems, automatically.</p>
         </div>
 
         {theme && (
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors shadow-sm bg-white dark:bg-slate-900"
+            className="p-2 rounded-lg border border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-zinc-500 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-zinc-950"
             aria-label="Toggle theme"
           >
             {theme === "light" ? (
@@ -704,56 +941,57 @@ export default function HomePage() {
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
 
-        {/* Input panel */}
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800/80 overflow-hidden shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-850 bg-slate-50/50 dark:bg-slate-900/30">
-            <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300">Configure Analysis</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Upload your architecture documents and describe your automation goals — the agent will discover systems, analyse gaps, and generate connectors automatically.
+        {/* ------------------------------------------------------------------ */}
+        {/* Input panel                                                          */}
+        {/* ------------------------------------------------------------------ */}
+        <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-zinc-900 bg-slate-50/50 dark:bg-zinc-900/30">
+            <h2 className="text-sm font-bold text-slate-800 dark:text-zinc-100">Start Your Analysis</h2>
+            <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">
+              Upload your company documents and describe what you want to automate. Bridgent will map your systems, find missing connections, and build the integrations for you.
             </p>
           </div>
 
           <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Left — file upload */}
+
+            {/* Left: documents */}
             <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wide">
-                Architecture Documents
-              </p>
-              <p className="text-xs text-slate-400 dark:text-slate-500">
-                Runbooks, system inventories, architecture diagrams, contracts — anything describing your tech stack.
+              <p className="text-xs font-bold text-slate-600 dark:text-zinc-400 uppercase tracking-wide">Your Documents</p>
+              <p className="text-xs text-slate-400 dark:text-zinc-600">
+                Contracts, process guides, architecture notes, org charts, anything that describes how your business operates and what tools you use.
               </p>
 
               <div
                 {...getRootProps()}
-                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-300
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors duration-150
                   ${isDragActive
                     ? "border-brand-500 bg-brand-50/50 dark:bg-brand-950/20"
-                    : "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/20 hover:border-brand-400 dark:hover:border-brand-500 hover:bg-white dark:hover:bg-slate-900"
+                    : "border-slate-300 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/40 hover:border-brand-400 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900"
                   }
-                  ${isRunning ? "pointer-events-none opacity-60" : ""}`}
+                  ${isRunning ? "pointer-events-none opacity-50" : ""}`}
               >
                 <input {...getInputProps()} />
                 <div className="flex flex-col items-center gap-2 text-slate-500">
-                  <svg className="w-8 h-8 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-8 h-8 text-slate-400 dark:text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                       d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                    {isDragActive ? "Drop files here" : "Drop files or click to browse"}
+                  <p className="text-sm font-semibold text-slate-700 dark:text-zinc-300">
+                    {isDragActive ? "Drop your files here" : "Drop files here or click to browse"}
                   </p>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500">PDF, DOCX, PPTX, XLSX, CSV, MD, TXT, PNG, JPG</p>
+                  <p className="text-[11px] text-slate-400 dark:text-zinc-600">PDF, Word, PowerPoint, Excel, CSV, Markdown, Text, Images</p>
                 </div>
               </div>
 
               {files.length > 0 && (
-                <div className="rounded-lg border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800/80 max-h-48 overflow-y-auto">
+                <div className="rounded-lg border border-slate-200 dark:border-zinc-800 divide-y divide-slate-100 dark:divide-zinc-900 max-h-48 overflow-y-auto">
                   {files.map((f) => (
-                    <div key={f.name} className="flex items-center px-3 py-2 gap-2 hover:bg-slate-50 dark:hover:bg-slate-950/50">
-                      <span className="text-[10px] font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-455 uppercase shrink-0">
+                    <div key={f.name} className="flex items-center px-3 py-2 gap-2 hover:bg-slate-50 dark:hover:bg-zinc-900/50 transition-colors">
+                      <span className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 px-1.5 py-0.5 rounded text-slate-600 dark:text-zinc-400 uppercase shrink-0 border border-slate-200 dark:border-zinc-800">
                         {f.name.split(".").pop()}
                       </span>
-                      <span className="flex-1 text-xs text-slate-700 dark:text-slate-300 truncate font-medium">{f.name}</span>
-                      <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                      <span className="flex-1 text-xs text-slate-700 dark:text-zinc-300 truncate font-medium">{f.name}</span>
+                      <span className="text-xs text-slate-400 dark:text-zinc-600 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
                       <button
                         onClick={() => removeFile(f.name)}
                         disabled={isRunning}
@@ -769,39 +1007,37 @@ export default function HomePage() {
               )}
             </div>
 
-            {/* Right — use cases */}
+            {/* Right: goals */}
             <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wide">
-                Automation Goals
-              </p>
-              <p className="text-xs text-slate-400 dark:text-slate-500">
-                One goal per line — describe what business outcomes you want to automate across your systems.
+              <p className="text-xs font-bold text-slate-600 dark:text-zinc-400 uppercase tracking-wide">Your Business Goals</p>
+              <p className="text-xs text-slate-400 dark:text-zinc-600">
+                Describe the outcomes you want to automate, one per line. What should happen automatically across your systems?
               </p>
               <textarea
                 value={useCaseText}
                 onChange={(e) => setUseCaseText(e.target.value)}
                 disabled={isRunning}
                 placeholder={
-                  "Sync new leads from the website to the CRM automatically\n" +
-                  "Auto-generate invoices when a deal is marked closed-won\n" +
-                  "Send order confirmation emails via the communication platform\n" +
-                  "Notify the team when a high-priority ticket is created"
+                  "Sync new leads from our website to the CRM automatically\n" +
+                  "Generate invoices when a deal is marked as closed\n" +
+                  "Send order confirmation emails through our messaging platform\n" +
+                  "Alert the team when a high-priority support ticket is created"
                 }
                 rows={9}
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2.5 text-sm text-slate-800 dark:text-slate-200
-                  placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500
-                  disabled:bg-slate-50 dark:disabled:bg-slate-950 disabled:text-slate-400 dark:disabled:text-slate-600 resize-none font-mono bg-white dark:bg-slate-950"
+                className="w-full rounded-lg border border-slate-300 dark:border-zinc-800 px-3 py-2.5 text-sm text-slate-800 dark:text-zinc-100
+                  placeholder:text-slate-400 dark:placeholder:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500
+                  disabled:opacity-50 resize-none font-mono bg-white dark:bg-zinc-900 transition-colors duration-150"
               />
             </div>
           </div>
 
-          {/* Actions footer */}
-          <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-850 flex items-center gap-3 bg-slate-50/50 dark:bg-slate-900/10">
+          {/* Footer actions */}
+          <div className="px-5 py-4 border-t border-slate-100 dark:border-zinc-900 flex items-center gap-3 bg-slate-50/50 dark:bg-zinc-900/20">
             <button
               onClick={runAll}
               disabled={!files.length || !useCaseText.trim() || isRunning}
-              className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-semibold hover:bg-brand-700
-                disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-brand-500/10 hover:shadow-lg hover:shadow-brand-500/20 flex items-center gap-2 text-sm"
+              className="px-5 py-2.5 bg-brand-600 text-white rounded-lg font-semibold hover:bg-brand-700 active:bg-brand-800
+                disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2 text-sm shadow-sm"
             >
               {isRunning ? (
                 <>
@@ -809,110 +1045,122 @@ export default function HomePage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Running Pipeline...
+                  Analysing...
                 </>
-              ) : (
-                "Run Full Analysis"
-              )}
+              ) : "Analyse Now"}
             </button>
 
             {hasStarted && !isRunning && (
               <button
                 onClick={reset}
-                className="px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
+                className="px-4 py-2.5 border border-slate-300 dark:border-zinc-800 rounded-lg text-sm font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-zinc-950"
               >
-                Reset
+                Start Over
               </button>
             )}
 
             {!files.length && (
-              <p className="text-xs text-slate-400 dark:text-slate-550">Upload at least one document to begin</p>
+              <p className="text-xs text-slate-400 dark:text-zinc-600">Add your documents to get started</p>
             )}
             {files.length > 0 && !useCaseText.trim() && (
-              <p className="text-xs text-slate-400 dark:text-slate-550">Add at least one automation goal to begin</p>
+              <p className="text-xs text-slate-400 dark:text-zinc-600">Add at least one business goal to continue</p>
             )}
           </div>
         </div>
 
-        {/* Pipeline progress */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Pipeline progress                                                    */}
+        {/* ------------------------------------------------------------------ */}
         {hasStarted && <PipelineProgress stages={pipelineStages} />}
 
-        {/* Level 1 */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Level 1 results                                                      */}
+        {/* ------------------------------------------------------------------ */}
         {hasStarted && (
           <div className="space-y-4">
-            {l1State.phase === "processing" && <ProcessingCard message={l1Msg} />}
+            {l1State.phase === "processing" && (
+              <ProcessingFeed feed={l1Feed} defaultMsg="Scanning your documents..." />
+            )}
             {l1State.phase === "error" && <ErrorCard message={l1State.message} />}
 
             {l1Result && (
               <div className="space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">Your Technology Map</h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">
+                    Every software system and tool Bridgent found across your documents, along with how they connect. The confidence score shows how certain we are about each system.
+                  </p>
+                </div>
+                {/* Stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
-                    { label: "Documents", value: l1Result.total_documents_processed },
-                    { label: "Systems Found", value: l1Result.total_systems_found },
-                    { label: "Relationships", value: l1Result.graph_stats.total_edges },
-                    { label: "Flagged for Review", value: l1Result.systems_flagged_for_review },
+                    { label: "Documents Read",    value: l1Result.total_documents_processed },
+                    { label: "Systems Found",     value: l1Result.total_systems_found },
+                    { label: "Connections Mapped",value: l1Result.graph_stats.total_edges },
+                    { label: "Needs Attention",   value: l1Result.systems_flagged_for_review },
                   ].map(({ label, value }) => (
-                    <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">{value}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{label}</p>
+                    <div key={label} className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 p-4 shadow-sm">
+                      <p className="text-2xl font-bold text-slate-900 dark:text-white">{value}</p>
+                      <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{label}</p>
                     </div>
                   ))}
                 </div>
 
+                {/* Download */}
                 <div className="flex justify-end">
                   <button
-                    onClick={() => {
-                      const blob = new Blob([JSON.stringify(l1Result, null, 2)], { type: "application/json" })
-                      const url = URL.createObjectURL(blob)
-                      const a = document.createElement("a")
-                      a.href = url
-                      a.download = "discovery_inventory.json"
-                      a.click()
-                      URL.revokeObjectURL(url)
-                    }}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
+                    onClick={() => downloadJson(l1Result, "systems_report.json")}
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-zinc-800 rounded-lg text-sm font-medium text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-zinc-950"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    Download Inventory JSON
+                    Download Systems Report
                   </button>
                 </div>
 
-                <div className="flex gap-1 bg-slate-100 dark:bg-slate-850 rounded-lg p-1 w-fit border border-slate-200/50 dark:border-slate-800">
-                  {(["systems", "relationships"] as const).map((tab) => (
+                {/* Tabs */}
+                <div className="flex gap-1 bg-slate-100 dark:bg-zinc-900 rounded-lg p-1 w-fit border border-slate-200 dark:border-zinc-800">
+                  {([
+                    { key: "systems", label: "Systems" },
+                    { key: "connections", label: "Network" },
+                  ] as const).map(({ key, label }) => (
                     <button
-                      key={tab}
-                      onClick={() => setActiveTab(tab)}
-                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all capitalize
-                        ${activeTab === tab
-                          ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
-                          : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
+                      key={key}
+                      onClick={() => setActiveTab(key)}
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-colors
+                        ${activeTab === key
+                          ? "bg-white dark:bg-zinc-950 text-slate-900 dark:text-white shadow-sm"
+                          : "text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"}`}
                     >
-                      {tab}
+                      {label}
                     </button>
                   ))}
                 </div>
 
+                {/* Systems table */}
                 {activeTab === "systems" && (
-                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                  <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">System</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Category</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Criticality</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 w-40">Confidence</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-center">Mentions</th>
+                          <tr className="border-b border-slate-200 dark:border-zinc-900 bg-slate-50 dark:bg-zinc-900/50 text-left">
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">System Name</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">System Type</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">Importance</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400 w-40">How Certain</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400 text-center">Times Found</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                        <tbody className="divide-y divide-slate-100 dark:divide-zinc-900">
                           {l1Result.systems.map((sys, i) => (
-                            <tr key={`${sys.canonical_name}-${i}`} className={sys.needs_human_review ? "bg-amber-50/40 dark:bg-amber-950/10" : "hover:bg-slate-50/30 dark:hover:bg-slate-900/20"}>
+                            <tr key={`${sys.canonical_name}-${i}`}
+                              className={sys.needs_human_review
+                                ? "bg-amber-50/40 dark:bg-amber-950/10"
+                                : "hover:bg-slate-50 dark:hover:bg-zinc-900/30 transition-colors"}>
                               <td className="px-4 py-3">
-                                <div className="font-semibold text-slate-900 dark:text-slate-100">{sys.canonical_name}</div>
+                                <div className="font-semibold text-slate-900 dark:text-white">{sys.canonical_name}</div>
                                 {sys.needs_human_review && sys.review_note && (
                                   <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5 font-medium flex items-center gap-1">
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
@@ -920,170 +1168,154 @@ export default function HomePage() {
                                   </div>
                                 )}
                               </td>
-                              <td className="px-4 py-3 text-slate-600 dark:text-slate-350">{sys.category}</td>
+                              <td className="px-4 py-3 text-slate-600 dark:text-zinc-400">{sys.category}</td>
                               <td className="px-4 py-3">
                                 <Badge text={sys.criticality} color={CRITICALITY_COLORS[sys.criticality] ?? CRITICALITY_COLORS.unknown} />
                               </td>
                               <td className="px-4 py-3"><ConfidenceBar value={sys.confidence} /></td>
-                              <td className="px-4 py-3 text-slate-650 dark:text-slate-400 text-center font-mono">{sys.mention_count}</td>
+                              <td className="px-4 py-3 text-slate-600 dark:text-zinc-400 text-center font-mono">{sys.mention_count}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                     {l1Result.systems.length === 0 && (
-                      <div className="px-4 py-8 text-center text-sm text-slate-400">No systems found</div>
+                      <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-zinc-600">No systems found in your documents</div>
                     )}
                   </div>
                 )}
 
-                {activeTab === "relationships" && (
-                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Source</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Relation</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Target</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 w-32">Confidence</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                          {l1Result.relationships.map((rel, i) => (
-                            <tr key={i} className="hover:bg-slate-50/30 dark:hover:bg-slate-900/20">
-                              <td className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-200">{rel.source}</td>
-                              <td className="px-4 py-3">
-                                <span className="text-[10px] bg-brand-100 dark:bg-brand-950/60 text-brand-700 dark:text-brand-400 px-2 py-0.5 rounded-full font-bold font-mono border border-brand-200/30">
-                                  {rel.relation}
-                                </span>
-                                <span className="ml-2 text-xs text-slate-400 dark:text-slate-500 font-medium">{rel.direction}</span>
-                              </td>
-                              <td className="px-4 py-3 font-semibold text-slate-900 dark:text-slate-200">{rel.target}</td>
-                              <td className="px-4 py-3"><ConfidenceBar value={rel.confidence} /></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {l1Result.relationships.length === 0 && (
-                      <div className="px-4 py-8 text-center text-sm text-slate-400">No relationships found</div>
-                    )}
-                  </div>
+                {/* Network graph */}
+                {activeTab === "connections" && (
+                  l1Result.relationships.length === 0
+                    ? <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 px-4 py-8 text-center text-sm text-slate-400 dark:text-zinc-600 shadow-sm">No connections found between systems</div>
+                    : <SystemGraph systems={l1Result.systems} relationships={l1Result.relationships} />
                 )}
               </div>
             )}
           </div>
         )}
 
-        {/* Level 2 */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Level 2 results                                                      */}
+        {/* ------------------------------------------------------------------ */}
         {l2State.phase !== "idle" && (
           <div className="space-y-4">
-            {l2State.phase === "processing" && <ProcessingCard message={l2Msg} />}
+            {l2State.phase === "processing" && (
+              <ProcessingFeed feed={l2Feed} defaultMsg="Reviewing your business goals..." />
+            )}
             {l2State.phase === "error" && <ErrorCard message={l2State.message} />}
 
             {l2Report && (
               <div className="space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">Integration Gaps</h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">
+                    Connections between your systems that are missing or incomplete. Each gap blocks one or more of your business goals. The priority score helps you decide what to build first.
+                  </p>
+                </div>
+                {/* Stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {[
-                    { label: "Use Cases Mapped", value: l2Report.use_cases_analyzed },
-                    { label: "Total Integration Checks", value: l2Report.total_gaps },
-                    { label: "Missing / Partial", value: l2Report.missing_integrations },
-                    { label: "Unmapped Use Cases", value: l2Report.skipped.unmapped_use_cases.length },
+                    { label: "Goals Reviewed",       value: l2Report.use_cases_analyzed },
+                    { label: "Connections Assessed",  value: l2Report.total_gaps },
+                    { label: "Connections Needed",    value: l2Report.missing_integrations },
+                    { label: "Goals Not Matched",     value: l2Report.skipped.unmapped_use_cases.length },
                   ].map(({ label, value }) => (
-                    <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">{value}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{label}</p>
+                    <div key={label} className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 p-4 shadow-sm">
+                      <p className="text-2xl font-bold text-slate-900 dark:text-white">{value}</p>
+                      <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{label}</p>
                     </div>
                   ))}
                 </div>
 
+                {/* Download */}
                 <div className="flex justify-end">
                   <button
-                    onClick={() => {
-                      const blob = new Blob([JSON.stringify(l2Report, null, 2)], { type: "application/json" })
-                      const url = URL.createObjectURL(blob)
-                      const a = document.createElement("a")
-                      a.href = url
-                      a.download = "gap_analysis.json"
-                      a.click()
-                      URL.revokeObjectURL(url)
-                    }}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
+                    onClick={() => downloadJson(l2Report, "gap_report.json")}
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-zinc-800 rounded-lg text-sm font-medium text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-zinc-950"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    Download Gap Report JSON
+                    Download Gap Report
                   </button>
                 </div>
 
-                <div className="flex gap-1 bg-slate-100 dark:bg-slate-850 rounded-lg p-1 w-fit border border-slate-200/50 dark:border-slate-800">
+                {/* Tabs */}
+                <div className="flex gap-1 bg-slate-100 dark:bg-zinc-900 rounded-lg p-1 w-fit border border-slate-200 dark:border-zinc-800">
                   {([
-                    { key: "gaps", label: `Gaps (${l2Report.gaps.length})` },
-                    { key: "dependencies", label: `Dependencies (${l2Report.dependency_graph.length})` },
-                    { key: "skipped", label: `Skipped (${l2Report.skipped.unmapped_use_cases.length + l2Report.skipped.rejected_systems.length})` },
+                    { key: "gaps",     label: `Missing Connections (${l2Report.gaps.length})` },
+                    { key: "order",    label: `Build Order (${l2Report.dependency_graph.length})` },
+                    { key: "unmatched",label: `Not Matched (${l2Report.skipped.unmapped_use_cases.length + l2Report.skipped.rejected_systems.length})` },
                   ] as const).map(({ key, label }) => (
                     <button
                       key={key}
                       onClick={() => setL2Tab(key)}
-                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-colors
                         ${l2Tab === key
-                          ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
-                          : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
+                          ? "bg-white dark:bg-zinc-950 text-slate-900 dark:text-white shadow-sm"
+                          : "text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"}`}
                     >
                       {label}
                     </button>
                   ))}
                 </div>
 
+                {/* Missing connections table */}
                 {l2Tab === "gaps" && (
-                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                  <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-left">
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Integration</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Status</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400">Effort</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-center">Blocked</th>
-                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-400 text-right">Priority</th>
+                          <tr className="border-b border-slate-200 dark:border-zinc-900 bg-slate-50 dark:bg-zinc-900/50 text-left">
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">Connection</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">Status</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400">Time Required</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400 text-center">Goals Blocked</th>
+                            <th className="px-4 py-3 font-semibold text-slate-600 dark:text-zinc-400 text-right">Priority</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                        <tbody className="divide-y divide-slate-100 dark:divide-zinc-900">
                           {l2Report.gaps.map((gap, i) => (
-                            <tr key={i} className={gap.status === "missing" ? "bg-red-50/20 dark:bg-red-950/10 hover:bg-red-50/30 dark:hover:bg-red-950/15" : "hover:bg-slate-50/30 dark:hover:bg-slate-900/20"}>
+                            <tr key={i}
+                              className={gap.status === "missing"
+                                ? "bg-red-50/20 dark:bg-red-950/10 hover:bg-red-50/30 dark:hover:bg-red-950/15"
+                                : "hover:bg-slate-50 dark:hover:bg-zinc-900/30 transition-colors"}>
                               <td className="px-4 py-3">
-                                <div className="font-semibold text-slate-900 dark:text-slate-150">
+                                <div className="font-semibold text-slate-900 dark:text-white">
                                   {gap.source_system} to {gap.destination_system}
                                 </div>
                                 {gap.entities.length > 0 && (
-                                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
+                                  <div className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5 font-medium">
                                     {gap.entities.join(", ")}
                                   </div>
                                 )}
                                 {gap.effort_rationale && (
-                                  <div className="text-xs text-slate-400 dark:text-slate-500 mt-1 italic font-medium">{gap.effort_rationale}</div>
+                                  <div className="text-xs text-slate-400 dark:text-zinc-600 mt-1 italic">{gap.effort_rationale}</div>
                                 )}
                               </td>
                               <td className="px-4 py-3">
-                                <Badge text={gap.status} color={STATUS_COLORS[gap.status] ?? "bg-slate-100 text-slate-600"} />
+                                <Badge
+                                  text={gap.status === "missing" ? "Missing" : "Available"}
+                                  color={STATUS_COLORS[gap.status] ?? "bg-slate-100 text-slate-600"}
+                                />
                               </td>
                               <td className="px-4 py-3">
                                 {gap.effort ? (
                                   <div className="flex flex-col gap-0.5">
                                     <Badge text={gap.effort} color={EFFORT_COLORS[gap.effort] ?? "bg-slate-100 text-slate-600"} />
-                                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold">{EFFORT_LABELS[gap.effort]}</span>
+                                    <span className="text-[10px] text-slate-400 dark:text-zinc-600 font-medium">{EFFORT_LABELS[gap.effort]}</span>
                                   </div>
                                 ) : (
-                                  <span className="text-xs text-slate-400 dark:text-slate-550 font-mono">-</span>
+                                  <span className="text-xs text-slate-400 dark:text-zinc-600">Not estimated</span>
                                 )}
                               </td>
-                              <td className="px-4 py-3 text-center text-slate-600 dark:text-slate-450 font-mono font-semibold">
+                              <td className="px-4 py-3 text-center text-slate-600 dark:text-zinc-400 font-mono font-semibold">
                                 {gap.use_cases_blocked.length}
                               </td>
-                              <td className="px-4 py-3 text-right font-mono text-sm text-slate-700 dark:text-slate-300 font-bold">
+                              <td className="px-4 py-3 text-right font-mono text-sm text-slate-700 dark:text-zinc-300 font-bold">
                                 {gap.priority_score.toFixed(0)}
                               </td>
                             </tr>
@@ -1092,30 +1324,33 @@ export default function HomePage() {
                       </table>
                     </div>
                     {l2Report.gaps.length === 0 && (
-                      <div className="px-4 py-8 text-center text-sm text-slate-400">No integration gaps detected</div>
+                      <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-zinc-600">
+                        No missing connections found
+                      </div>
                     )}
                   </div>
                 )}
 
-                {l2Tab === "dependencies" && (
+                {/* Build order */}
+                {l2Tab === "order" && (
                   <div className="space-y-3">
                     {l2Report.dependency_graph.length === 0 ? (
-                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-8 text-center text-sm text-slate-400">
-                        No blocking dependencies
+                      <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 px-4 py-8 text-center text-sm text-slate-400 dark:text-zinc-600">
+                        No dependencies between integrations
                       </div>
                     ) : (
                       l2Report.dependency_graph.map((dep, i) => (
-                        <div key={i} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+                        <div key={i} className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 p-4 shadow-sm">
                           <div className="flex items-start gap-3">
-                            <span className="mt-0.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold font-mono whitespace-nowrap border border-slate-200/50 dark:border-slate-700">
+                            <span className="mt-0.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 text-xs font-bold font-mono whitespace-nowrap border border-slate-200 dark:border-zinc-800">
                               {dep.integration}
                             </span>
                             <div className="flex-1">
-                              <p className="text-xs text-slate-500 dark:text-slate-450 mb-1 font-semibold">must exist before:</p>
+                              <p className="text-xs text-slate-500 dark:text-zinc-500 mb-1 font-semibold">must be built before:</p>
                               <ul className="space-y-1">
                                 {dep.required_before.map((uc, j) => (
-                                  <li key={j} className="text-sm text-slate-750 dark:text-slate-350 flex items-start gap-1.5">
-                                    <span className="text-slate-400 dark:text-slate-600 mt-0.5">-</span>
+                                  <li key={j} className="text-sm text-slate-700 dark:text-zinc-300 flex items-start gap-1.5">
+                                    <span className="text-slate-400 dark:text-zinc-600 mt-0.5">-</span>
                                     {uc}
                                   </li>
                                 ))}
@@ -1128,18 +1363,19 @@ export default function HomePage() {
                   </div>
                 )}
 
-                {l2Tab === "skipped" && (
+                {/* Not matched */}
+                {l2Tab === "unmatched" && (
                   <div className="space-y-4">
                     {l2Report.skipped.unmapped_use_cases.length > 0 && (
-                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
-                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Unmapped use cases</p>
+                      <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-zinc-900/50 border-b border-slate-200 dark:border-zinc-900">
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">Goals We Could Not Match</p>
                         </div>
-                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                        <div className="divide-y divide-slate-100 dark:divide-zinc-900">
                           {l2Report.skipped.unmapped_use_cases.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">{item.text}</p>
-                              <p className="text-xs text-slate-550 dark:text-slate-450 mt-0.5">{item.reason}</p>
+                              <p className="text-sm text-slate-800 dark:text-zinc-200 font-medium">{item.text}</p>
+                              <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{item.reason}</p>
                             </div>
                           ))}
                         </div>
@@ -1147,16 +1383,17 @@ export default function HomePage() {
                     )}
 
                     {l2Report.skipped.rejected_systems.length > 0 && (
-                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
-                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Rejected systems (not in inventory)</p>
+                      <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-zinc-900/50 border-b border-slate-200 dark:border-zinc-900">
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">Unrecognised Systems</p>
+                          <p className="text-xs text-slate-400 dark:text-zinc-600 mt-0.5">These systems were mentioned in your goals but were not found in your documents.</p>
                         </div>
-                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                        <div className="divide-y divide-slate-100 dark:divide-zinc-900">
                           {l2Report.skipped.rejected_systems.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800 dark:text-slate-200 font-bold">{item.system}</p>
-                              <p className="text-xs text-slate-550 dark:text-slate-450">{item.use_case}</p>
-                              <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 italic">{item.reason}</p>
+                              <p className="text-sm text-slate-800 dark:text-zinc-200 font-bold">{item.system}</p>
+                              <p className="text-xs text-slate-500 dark:text-zinc-500">{item.use_case}</p>
+                              <p className="text-xs text-slate-400 dark:text-zinc-600 mt-0.5 italic">{item.reason}</p>
                             </div>
                           ))}
                         </div>
@@ -1164,15 +1401,15 @@ export default function HomePage() {
                     )}
 
                     {l2Report.skipped.missing_capabilities.length > 0 && (
-                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                        <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
-                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Missing capabilities</p>
+                      <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+                        <div className="px-4 py-3 bg-slate-50 dark:bg-zinc-900/50 border-b border-slate-200 dark:border-zinc-900">
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">Missing Functionality</p>
                         </div>
-                        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                        <div className="divide-y divide-slate-100 dark:divide-zinc-900">
                           {l2Report.skipped.missing_capabilities.map((item, i) => (
                             <div key={i} className="px-4 py-3">
-                              <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">{item.capability_needed}</p>
-                              <p className="text-xs text-slate-550 dark:text-slate-450">{item.use_case}</p>
+                              <p className="text-sm text-slate-800 dark:text-zinc-200 font-medium">{item.capability_needed}</p>
+                              <p className="text-xs text-slate-500 dark:text-zinc-500">{item.use_case}</p>
                             </div>
                           ))}
                         </div>
@@ -1182,8 +1419,8 @@ export default function HomePage() {
                     {l2Report.skipped.unmapped_use_cases.length === 0 &&
                       l2Report.skipped.rejected_systems.length === 0 &&
                       l2Report.skipped.missing_capabilities.length === 0 && (
-                      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-8 text-center text-sm text-slate-400">
-                        Nothing was skipped — all use cases were mapped successfully
+                      <div className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 px-4 py-8 text-center text-sm text-slate-400 dark:text-zinc-600">
+                        All goals were successfully matched
                       </div>
                     )}
                   </div>
@@ -1193,100 +1430,119 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Level 3 */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Level 3 results                                                      */}
+        {/* ------------------------------------------------------------------ */}
         {l3State.phase !== "idle" && (
           <div className="space-y-4">
-            {l3State.phase === "processing" && <ProcessingCard message={l3Msg} />}
+            {l3State.phase === "processing" && (
+              <ProcessingFeed feed={l3Feed} defaultMsg="Building your integrations..." />
+            )}
             {l3State.phase === "error" && <ErrorCard message={l3State.message} />}
 
             {l3Bundles && l3Bundles.length > 0 && (
               <div className="space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">Ready-to-Deploy Integrations</h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">
+                    Fully written integration code for each gap Bridgent found. Download a package and deploy it to connect your systems. Each package includes the connector, configuration, tests, and setup guide.
+                  </p>
+                </div>
+                {/* Stats + download all */}
                 <div className="flex flex-wrap items-start gap-4">
                   <div className="grid grid-cols-4 gap-4 flex-1">
                     {[
-                      { label: "Bundles", value: l3Bundles.length, color: "text-slate-900 dark:text-slate-100" },
-                      { label: "Passed", value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length, color: "text-green-700 dark:text-green-400" },
-                      { label: "Failed", value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length, color: "text-red-700 dark:text-red-400" },
-                      { label: "Manual Setup", value: l3Bundles.filter(b => b.manual_setup_required).length, color: "text-amber-700 dark:text-amber-400" },
+                      { label: "Integrations Built", value: l3Bundles.length,                                                                       color: "text-slate-900 dark:text-white" },
+                      { label: "Ready to Deploy",    value: l3Bundles.filter(b => !b.manual_setup_required && b.validation.valid).length,            color: "text-green-700 dark:text-green-400" },
+                      { label: "Need Review",        value: l3Bundles.filter(b => !b.manual_setup_required && !b.validation.valid).length,           color: "text-red-700 dark:text-red-400" },
+                      { label: "Manual Setup",       value: l3Bundles.filter(b => b.manual_setup_required).length,                                   color: "text-amber-700 dark:text-amber-400" },
                     ].map(({ label, value, color }) => (
-                      <div key={label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+                      <div key={label} className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 p-4 shadow-sm">
                         <p className={`text-2xl font-bold ${color}`}>{value}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-450 mt-0.5 font-medium">{label}</p>
+                        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{label}</p>
                       </div>
                     ))}
                   </div>
                   {l3Bundles.some(b => !b.manual_setup_required) && (
                     <button
                       onClick={() => downloadAllBundles(l3Bundles.filter(b => !b.manual_setup_required))}
-                      className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-semibold hover:bg-brand-700 transition-all shadow-md shadow-brand-500/10 hover:shadow-lg whitespace-nowrap"
+                      className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-semibold hover:bg-brand-700 active:bg-brand-800 transition-colors shadow-sm whitespace-nowrap"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                           d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
-                      Download All (.zip)
+                      Download All Integrations
                     </button>
                   )}
                 </div>
 
+                {/* Bundle cards */}
                 {l3Bundles.map((bundle, i) => (
-                  <div key={i} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/10">
-                      <div className="font-bold text-slate-900 dark:text-slate-200">{bundle.gap_key}</div>
+                  <div key={i} className="bg-white dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-900 overflow-hidden shadow-sm">
+
+                    {/* Card header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-zinc-900 bg-slate-50/30 dark:bg-zinc-900/30">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          {bundle.source_system} to {bundle.destination_system}
+                        </div>
+                      </div>
                       <div className="flex items-center gap-2">
                         {bundle.manual_setup_required
-                          ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/40">MANUAL SETUP</span>
+                          ? <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/40 uppercase tracking-wide">Manual Setup Required</span>
                           : bundle.validation.valid
-                            ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40">VALID</span>
-                            : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40">INVALID</span>
+                            ? <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-green-100 dark:bg-green-950/40 text-green-800 dark:text-green-300 border border-green-200/50 dark:border-green-800/40 uppercase tracking-wide">Ready to Deploy</span>
+                            : <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-300 border border-red-200/50 dark:border-red-800/40 uppercase tracking-wide">Needs Review</span>
                         }
                         {!bundle.manual_setup_required && (
                           <button
                             onClick={() => downloadBundle(bundle)}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-slate-900"
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-300 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-zinc-950"
                           >
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                             </svg>
-                            .zip
+                            Download
                           </button>
                         )}
                       </div>
                     </div>
 
+                    {/* Manual setup explanation */}
                     {bundle.manual_setup_required && bundle.paradigm_notes && (
-                      <div className="px-4 py-3 bg-amber-50/50 dark:bg-amber-950/10 border-b border-slate-100 dark:border-slate-800">
-                        <p className="text-xs font-bold text-amber-800 dark:text-amber-400 mb-1">
-                          Why auto-generation was skipped ({bundle.paradigm.replace("_", " ")}):
-                        </p>
-                        <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed whitespace-pre-wrap font-medium">
+                      <div className="px-4 py-3 bg-amber-50/50 dark:bg-amber-950/10 border-b border-slate-100 dark:border-zinc-900">
+                        <p className="text-xs font-bold text-amber-800 dark:text-amber-400 mb-1">Why this requires manual setup:</p>
+                        <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed whitespace-pre-wrap">
                           {bundle.paradigm_notes}
                         </p>
                       </div>
                     )}
 
+                    {/* Validation status */}
                     {!bundle.manual_setup_required && (
-                      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-900/5">
+                      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100 dark:border-zinc-900 bg-slate-50/20 dark:bg-zinc-900/10">
                         {[
-                          { label: "Compiles", ok: bundle.validation.connector_compiles },
-                          { label: "Imports", ok: bundle.validation.connector_imports },
-                          { label: "YAML valid", ok: bundle.validation.agent_def_valid },
-                          { label: "Tests pass", ok: bundle.validation.tests_pass },
+                          { label: "Code Valid",      ok: bundle.validation.connector_compiles },
+                          { label: "Dependencies OK", ok: bundle.validation.connector_imports },
+                          { label: "Config Valid",    ok: bundle.validation.agent_def_valid },
+                          { label: "Tests Pass",      ok: bundle.validation.tests_pass },
                         ].map(({ label, ok }) => (
                           <div key={label} className="flex items-center gap-1.5 text-xs font-medium">
                             <span className={ok ? "text-green-600 dark:text-green-400 font-bold" : "text-red-500 dark:text-red-400 font-bold"}>
                               {ok ? "✓" : "✗"}
                             </span>
-                            <span className={ok ? "text-slate-700 dark:text-slate-350" : "text-slate-400 dark:text-slate-500"}>{label}</span>
+                            <span className={ok ? "text-slate-700 dark:text-zinc-300" : "text-slate-400 dark:text-zinc-600"}>{label}</span>
                           </div>
                         ))}
                       </div>
                     )}
 
+                    {/* Failure details */}
                     {!bundle.manual_setup_required && bundle.validation.failures.length > 0 && (
-                      <div className="px-4 py-3 bg-red-50/50 dark:bg-red-950/10 border-b border-slate-100 dark:border-slate-800">
-                        <p className="text-xs font-bold text-red-700 dark:text-red-400 mb-1.5">Failure details:</p>
+                      <div className="px-4 py-3 bg-red-50/50 dark:bg-red-950/10 border-b border-slate-100 dark:border-zinc-900">
+                        <p className="text-xs font-bold text-red-700 dark:text-red-400 mb-1.5">Issues Found:</p>
                         <ul className="space-y-1">
                           {bundle.validation.failures.map((f, j) => (
                             <li key={j} className="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap break-all">{f}</li>
@@ -1295,7 +1551,7 @@ export default function HomePage() {
                       </div>
                     )}
 
-                    {/* File viewer — always available for generated bundles */}
+                    {/* Integration files viewer */}
                     {!bundle.manual_setup_required && (
                       <>
                         <button
@@ -1303,9 +1559,9 @@ export default function HomePage() {
                             setExpandedBundle(expandedBundle === i ? null : i)
                             setBundleFileTab("connector")
                           }}
-                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 transition-colors border-t border-slate-100 dark:border-slate-800"
+                          className="w-full px-4 py-2.5 text-left flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-900/50 transition-colors border-t border-slate-100 dark:border-zinc-900"
                         >
-                          <span>View generated source code</span>
+                          <span>View Integration Files</span>
                           <svg
                             className={`w-4 h-4 transition-transform duration-200 ${expandedBundle === i ? "rotate-180" : ""}`}
                             fill="none" stroke="currentColor" viewBox="0 0 24 24"
@@ -1315,28 +1571,28 @@ export default function HomePage() {
                         </button>
 
                         {expandedBundle === i && (
-                          <div className="border-t border-slate-150 dark:border-slate-800">
-                            <div className="flex flex-wrap gap-0.5 bg-slate-100 dark:bg-slate-850 p-1 border-b border-slate-200 dark:border-slate-800">
+                          <div className="border-t border-slate-100 dark:border-zinc-900">
+                            <div className="flex flex-wrap gap-0.5 bg-slate-100 dark:bg-zinc-900 p-1 border-b border-slate-200 dark:border-zinc-900">
                               {([
-                                { key: "connector",    label: "connector.py" },
-                                { key: "agent_def",    label: "agent_def.yaml" },
-                                { key: "tests",        label: "test_connector.py" },
-                                { key: "requirements", label: "requirements.txt" },
-                                { key: "readme",       label: "README.md" },
+                                { key: "connector",    label: "Integration Code" },
+                                { key: "agent_def",    label: "Configuration" },
+                                { key: "tests",        label: "Tests" },
+                                { key: "requirements", label: "Dependencies" },
+                                { key: "readme",       label: "Instructions" },
                               ] as const).map(({ key, label }) => (
                                 <button
                                   key={key}
                                   onClick={() => setBundleFileTab(key)}
-                                  className={`px-3 py-1 rounded text-xs font-mono font-bold transition-all
+                                  className={`px-3 py-1 rounded text-xs font-semibold transition-colors
                                     ${bundleFileTab === key
-                                      ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
-                                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"}`}
+                                      ? "bg-white dark:bg-zinc-950 text-slate-900 dark:text-white shadow-sm"
+                                      : "text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"}`}
                                 >
                                   {label}
                                 </button>
                               ))}
                             </div>
-                            <pre className="p-4 text-xs font-mono text-slate-700 dark:text-slate-350 whitespace-pre-wrap break-all bg-slate-50 dark:bg-slate-950 max-h-80 overflow-y-auto">
+                            <pre className="p-4 text-xs font-mono text-slate-700 dark:text-zinc-300 whitespace-pre-wrap break-all bg-slate-50 dark:bg-black max-h-80 overflow-y-auto">
                               {bundleFileTab === "connector"    ? bundle.connector_code
                                 : bundleFileTab === "agent_def"   ? bundle.agent_def_yaml
                                 : bundleFileTab === "tests"        ? bundle.test_code

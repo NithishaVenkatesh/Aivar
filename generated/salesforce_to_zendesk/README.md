@@ -9,10 +9,11 @@ source documents. Confirm each against the live API documentation before use:
 
 - **`Id`**: `(unknown)`
 - **`Name`**: `(unknown)`
-- **`Deal_Amount__c`**: `(unknown)`
-- **`id`**: `(unknown)`
+- **` PartnerDealNumber`**: `(unknown)`
+- **`PartnerDealAmount`**: `(unknown)`
 - **`subject`**: `(unknown)`
 - **`description`**: `(unknown)`
+- **`priority`**: `(unknown)`
 
 > These values compile and pass the mocked unit tests, but may need adjustment for
 > your specific instance, tenant URL, or API version.
